@@ -22,6 +22,28 @@ export interface SchemaReadinessResult {
   queryError?: string;
 }
 
+function getMigrationHint(column: string): string {
+  switch (column) {
+    case 'search_vector':
+      return 'Run: npm run migration:run -- xconfess-backend (add FTS migration)';
+    case 'view_count':
+      return 'Run: npm run migration:run -- xconfess-backend (add view_count column)';
+    default:
+      return '';
+  }
+}
+
+function getIndexHint(index: string): string {
+  switch (index) {
+    case 'idx_confession_search_vector':
+      return 'Run: CREATE INDEX concurrently idx_confession_search_vector ON anonymous_confessions USING GIN(search_vector);';
+    case 'idx_confession_created_at':
+      return 'Run: CREATE INDEX concurrently idx_confession_created_at ON anonymous_confessions(created_at DESC);';
+    default:
+      return '';
+  }
+}
+
 @Injectable()
 export class MigrationVerificationService implements OnModuleInit {
   private readonly logger = new Logger(MigrationVerificationService.name);
@@ -93,8 +115,17 @@ export class MigrationVerificationService implements OnModuleInit {
       return;
     }
     if (!result.ok) {
+      const hints: string[] = [];
+      for (const col of result.missingColumns) {
+        const hint = getMigrationHint(col);
+        if (hint) hints.push(`${col}: ${hint}`);
+      }
+      for (const idx of result.missingIndexes) {
+        const hint = getIndexHint(idx);
+        if (hint) hints.push(`${idx}: ${hint}`);
+      }
       this.logger.warn(
-        `schema_readiness_degraded missingColumns=[${result.missingColumns.join(', ')}] missingIndexes=[${result.missingIndexes.join(', ')}]`,
+        `schema_readiness_degraded missingColumns=[${result.missingColumns.join(', ')}] missingIndexes=[${result.missingIndexes.join(', ')}] — ${hints.join('; ')}`,
       );
       return;
     }

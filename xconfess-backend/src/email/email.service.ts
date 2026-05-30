@@ -330,10 +330,18 @@ export class EmailService implements OnModuleInit {
       this.templateSloConfig = mailConfig.slo;
     }
 
+    const isDev =
+      !process.env.NODE_ENV ||
+      ['development', 'dev', 'local'].includes(process.env.NODE_ENV);
+
     if (!mailConfig?.primary?.host) {
-      this.logger.warn(
-        'No primary mail config found — using Ethereal test account.',
-      );
+      const msg =
+        'No primary mail config found — using Ethereal test account.';
+      if (isDev) {
+        this.logger.log(msg);
+      } else {
+        this.logger.warn(msg);
+      }
       this.initEtherealFallback();
       return;
     }
@@ -344,9 +352,13 @@ export class EmailService implements OnModuleInit {
       this.fallback = this.buildTransporter(mailConfig.fallback, 'fallback');
       this.logger.log('Fallback email provider configured.');
     } else {
-      this.logger.warn(
-        'No fallback email provider configured. Circuit breaker will have no fallback.',
-      );
+      const msg =
+        'No fallback email provider configured. Circuit breaker will have no fallback.';
+      if (isDev) {
+        this.logger.log(msg);
+      } else {
+        this.logger.warn(msg);
+      }
     }
   }
 

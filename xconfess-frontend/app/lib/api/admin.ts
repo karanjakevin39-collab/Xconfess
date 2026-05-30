@@ -181,10 +181,19 @@ export const adminApi = {
     action?: string;
     entityType?: string;
     entityId?: string;
+    requestId?: string;
+    startDate?: string;
+    endDate?: string;
     limit?: number;
     offset?: number;
   }) => {
-    const response = await apiClient.get('/api/admin/audit-logs', { params });
+    const response = await apiClient.get('/api/admin/audit-logs', {
+      params: {
+        ...params,
+        startDate: params?.startDate || undefined,
+        endDate: params?.endDate || undefined,
+      },
+    });
     return response.data;
   },
 

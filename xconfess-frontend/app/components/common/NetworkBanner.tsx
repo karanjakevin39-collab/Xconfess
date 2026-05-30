@@ -1,104 +1,117 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNetwork } from "@/app/lib/providers/NetworkStatusProvider";
-import { WifiOff, AlertTriangle, RefreshCcw, X } from "lucide-react";
+import { WifiOff, AlertTriangle, ServerOff, RefreshCcw, X } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export const NetworkBanner = () => {
-  const { isOnline, isDegraded } = useNetwork();
+  const { isOnline, isDegraded, isApiOnline, checkApiStatus } = useNetwork();
+  const queryClient = useQueryClient();
   const [isVisible, setIsVisible] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
-  const [lastStatus, setLastStatus] = useState({ isOnline, isDegraded });
+  const [offlineReason, setOfflineReason] = useState<"browser" | "api" | "degraded" | null>(null);
 
   useEffect(() => {
-    // Show banner if offline or degraded
-    if (!isOnline || isDegraded) {
+    if (!isOnline) {
+      setOfflineReason("browser");
       setIsVisible(true);
-      setLastStatus({ isOnline, isDegraded });
+    } else if (!isApiOnline) {
+      setOfflineReason("api");
+      setIsVisible(true);
+    } else if (isDegraded) {
+      setOfflineReason("degraded");
+      setIsVisible(true);
     } else {
-      // Small delay before hiding to avoid flickering on quick reconnections
-      const timer = setTimeout(() => setIsVisible(false), 3000);
+      const timer = setTimeout(() => {
+        setIsVisible(false);
+        setOfflineReason(null);
+      }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [isOnline, isDegraded]);
+  }, [isOnline, isDegraded, isApiOnline]);
 
-  const handleRetry = () => {
+  const handleRetry = useCallback(async () => {
     setIsRetrying(true);
-    // Trigger a window refresh or a re-fetch of critical data
-    // For now, we simulate a retry by checking navigation status
-    setTimeout(() => {
-      setIsRetrying(false);
-      if (typeof window !== "undefined") {
-        window.location.reload();
+    if (offlineReason === "api" || offlineReason === "degraded") {
+      const ok = await checkApiStatus();
+      if (ok) {
+        queryClient.invalidateQueries();
       }
-    }, 1500);
-  };
+    } else if (typeof window !== "undefined" && "navigator" in window) {
+      if (navigator.onLine) {
+        const ok = await checkApiStatus();
+        if (ok) {
+          queryClient.invalidateQueries();
+        }
+      }
+    }
+    setIsRetrying(false);
+  }, [offlineReason, checkApiStatus, queryClient]);
 
   if (!isVisible) return null;
 
+  const icon = offlineReason === "browser" ? WifiOff : offlineReason === "api" ? ServerOff : AlertTriangle;
+  const Icon = icon;
+
+  const bannerTitle = {
+    browser: "You're offline",
+    api: "Backend unreachable",
+    degraded: "Unstable connection",
+  }[offlineReason!];
+
+  const bannerText = {
+    browser: "Check your internet connection.",
+    api: "The backend server is not responding. Retry when back online.",
+    degraded: "Some features may be limited.",
+  }[offlineReason!];
+
   return (
-    <div 
-      className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-[calc(100%-2rem)] max-w-md transition-all duration-500 ease-out transform ${
-        isVisible ? "translate-y-0 opacity-100" : "-translate-y-10 opacity-0"
-      }`}
-    >
-      <div className={`relative overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-md ${
-        !lastStatus.isOnline 
-          ? "bg-red-500/10 border-red-500/20 text-red-200" 
-          : "bg-amber-500/10 border-amber-500/20 text-amber-200"
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] w-[calc(100%-2rem)] max-w-sm transition-all duration-500 ease-out">
+      <div className={`relative overflow-hidden rounded-xl border p-3 shadow-2xl backdrop-blur-md ${
+        offlineReason === "browser"
+          ? "bg-red-500/10 border-red-500/20 text-red-200"
+          : offlineReason === "api"
+            ? "bg-orange-500/10 border-orange-500/20 text-orange-200"
+            : "bg-amber-500/10 border-amber-500/20 text-amber-200"
       }`}>
-        {/* Animated background gradient */}
-        <div className={`absolute inset-0 opacity-20 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer`} />
-        
-        <div className="flex items-start gap-4 relative z-10">
-          <div className={`flex-shrink-0 rounded-xl p-2 ${
-            !lastStatus.isOnline ? "bg-red-500/20" : "bg-amber-500/20"
+        <div className="flex items-start gap-3">
+          <div className={`flex-shrink-0 rounded-lg p-1.5 ${
+            offlineReason === "browser" ? "bg-red-500/20" : offlineReason === "api" ? "bg-orange-500/20" : "bg-amber-500/20"
           }`}>
-            {!lastStatus.isOnline ? (
-              <WifiOff className="w-5 h-5 text-red-400" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-amber-400" />
-            )}
+            <Icon className="w-4 h-4" />
           </div>
-          
-          <div className="flex-grow pt-0.5">
-            <h3 className="font-semibold text-sm">
-              {!lastStatus.isOnline ? "You're offline" : "Poor network connection"}
-            </h3>
-            <p className="text-xs opacity-70 mt-0.5 leading-relaxed">
-              {!lastStatus.isOnline 
-                ? "Check your internet connection and try again." 
-                : "Your connection is unstable. Some features may be limited."}
-            </p>
-            
-            <div className="mt-3 flex items-center gap-3">
+          <div className="flex-grow min-w-0">
+            <p className="font-semibold text-sm leading-tight">{bannerTitle}</p>
+            <p className="text-[11px] opacity-70 mt-0.5 leading-tight">{bannerText}</p>
+            <div className="mt-2 flex items-center gap-2">
               <button
                 onClick={handleRetry}
                 disabled={isRetrying}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  !lastStatus.isOnline
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                  offlineReason === "browser"
                     ? "bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20"
-                    : "bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20"
+                    : offlineReason === "api"
+                      ? "bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20"
+                      : "bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20"
                 } disabled:opacity-50`}
               >
-                <RefreshCcw className={`w-3.5 h-3.5 ${isRetrying ? "animate-spin" : ""}`} />
-                {isRetrying ? "Retrying..." : "Retry Connection"}
+                <RefreshCcw className={`w-3 h-3 ${isRetrying ? "animate-spin" : ""}`} />
+                {isRetrying ? "Checking..." : "Retry"}
               </button>
-              
               <button
                 onClick={() => setIsVisible(false)}
-                className="text-xs font-medium opacity-60 hover:opacity-100 transition-opacity"
+                className="text-[11px] font-medium opacity-60 hover:opacity-100 transition-opacity"
               >
                 Dismiss
               </button>
             </div>
           </div>
-
-          <button 
+          <button
             onClick={() => setIsVisible(false)}
-            className="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity p-1"
+            className="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity p-0.5"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>

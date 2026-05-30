@@ -1,39 +1,77 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 
 interface NetworkStatusContextType {
   isOnline: boolean;
   isDegraded: boolean;
+  isApiOnline: boolean;
   setDegraded: (degraded: boolean) => void;
+  setApiOnline: (online: boolean) => void;
+  checkApiStatus: () => Promise<boolean>;
 }
 
 const NetworkStatusContext = createContext<NetworkStatusContextType | undefined>(undefined);
 
+function getApiBaseUrl(): string {
+  if (typeof window === "undefined") return "http://localhost:3000";
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+}
+
 export const NetworkStatusProvider = ({ children }: { children: React.ReactNode }) => {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [isDegraded, setIsDegraded] = useState(false);
+  const [isApiOnline, setIsApiOnline] = useState(true);
+  const checkInFlight = useRef(false);
 
   const setDegradedValue = useCallback((degraded: boolean) => {
     setIsDegraded(degraded);
   }, []);
 
+  const setApiOnlineValue = useCallback((online: boolean) => {
+    setIsApiOnline(online);
+  }, []);
+
+  const checkApiStatus = useCallback(async (): Promise<boolean> => {
+    if (checkInFlight.current) return isApiOnline;
+    checkInFlight.current = true;
+    try {
+      const base = getApiBaseUrl().replace(/\/api\/?$/, "");
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${base}/api/health`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      clearTimeout(id);
+      const online = res.ok;
+      setIsApiOnline(online);
+      return online;
+    } catch {
+      setIsApiOnline(false);
+      return false;
+    } finally {
+      checkInFlight.current = false;
+    }
+  }, [isApiOnline]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handleOnline = () => setIsOnline(true);
+    const handleOnline = () => {
+      setIsOnline(true);
+      checkApiStatus();
+    };
     const handleOffline = () => setIsOnline(false);
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
-    // Network Information API for degradation detection
     const nav = navigator as any;
     const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
 
     const updateConnectionStatus = () => {
       if (connection) {
-        // Degraded if effectiveType is 2g or slow-2g, or if rtt is high
         const degraded = 
           connection.effectiveType === "2g" || 
           connection.effectiveType === "slow-2g" ||
@@ -55,10 +93,10 @@ export const NetworkStatusProvider = ({ children }: { children: React.ReactNode 
         connection.removeEventListener("change", updateConnectionStatus);
       }
     };
-  }, []);
+  }, [checkApiStatus]);
 
   return (
-    <NetworkStatusContext.Provider value={{ isOnline, isDegraded, setDegraded: setDegradedValue }}>
+    <NetworkStatusContext.Provider value={{ isOnline, isDegraded, isApiOnline, setDegraded: setDegradedValue, setApiOnline: setApiOnlineValue, checkApiStatus }}>
       {children}
     </NetworkStatusContext.Provider>
   );

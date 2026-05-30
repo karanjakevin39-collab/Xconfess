@@ -24,6 +24,10 @@ export class MailConfigValidator implements OnModuleInit {
       warnings: [],
     };
 
+    const isDev =
+      !process.env.NODE_ENV ||
+      ['development', 'dev', 'local'].includes(process.env.NODE_ENV);
+
     const host = this.configService.get<string>('mail.primary.host');
     const port = this.configService.get<string>('mail.primary.port');
     const user = this.configService.get<string>('mail.primary.auth.user');
@@ -83,9 +87,14 @@ export class MailConfigValidator implements OnModuleInit {
     if (result.valid) {
       this.logger.log('Mail configuration validated successfully');
     } else {
-      this.logger.error(
-        `Mail configuration has errors: ${result.errors.join(', ')}`,
-      );
+      const msg = `Mail configuration has errors: ${result.errors.join(', ')}`;
+      if (isDev) {
+        this.logger.warn(
+          `${msg} — Email features will be disabled, but the app can continue in local development. Set MAIL_HOST, MAIL_USER, MAIL_PASSWORD, etc. in .env to enable email.`,
+        );
+      } else {
+        this.logger.error(msg);
+      }
     }
 
     if (result.warnings.length > 0) {
