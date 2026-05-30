@@ -1,5 +1,5 @@
-import { Process, Processor } from '@nestjs/bull';
-import { Job } from 'bull';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import archiver from 'archiver';
@@ -15,7 +15,7 @@ import { ConfigService } from '@nestjs/config';
 import { EXPORT_QUEUE_NAME } from './data-export.constants';
 
 @Processor(EXPORT_QUEUE_NAME)
-export class ExportProcessor {
+export class ExportProcessor extends WorkerHost {
   private readonly logger = new Logger(ExportProcessor.name);
   private readonly CHUNK_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB per chunk
 
@@ -29,10 +29,12 @@ export class ExportProcessor {
     private dataExportService: DataExportService,
     private emailService: EmailService,
     private configService: ConfigService,
-  ) {}
+  ) {
+    super();
+  }
 
-  @Process('process-export')
-  async handleExport(job: Job<{ userId: string; requestId: string }>) {
+  async process(job: Job<{ userId: string; requestId: string }>) {
+    if (job.name !== 'process-export') return;
     const { userId, requestId } = job.data;
 
     try {
@@ -70,8 +72,7 @@ export class ExportProcessor {
         `Chunked export ${requestId} completed with ${result.chunkCount} chunks.`,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'unknown error';
+      const message = error instanceof Error ? error.message : 'unknown error';
       this.logger.error(`Export ${requestId} failed: ${message}`);
       // Use the service helper so retryCount and lastFailureReason are persisted
       await this.dataExportService.markExportFailed(requestId, message);

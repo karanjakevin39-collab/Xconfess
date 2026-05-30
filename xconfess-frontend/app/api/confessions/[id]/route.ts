@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from "@/app/lib/config";
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
 
 const BASE_API_URL = getApiBaseUrl();
 
@@ -9,10 +10,7 @@ export async function GET(
   try {
     const { id } = await context.params;
     if (!id) {
-      return new Response(
-        JSON.stringify({ message: "Confession ID is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
+      return createApiErrorResponse("Confession ID is required", { status: 400 });
     }
 
     const url = `${BASE_API_URL}/confessions/${id}`;
@@ -112,15 +110,11 @@ export async function GET(
         );
       }
       const err = await response.json().catch(() => ({}));
-      return new Response(
-        JSON.stringify({
-          message: err.message || "Failed to fetch confession",
-        }),
-        {
-          status: response.status,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      return createApiErrorResponse(err, {
+        status: response.status,
+        fallbackMessage: "Failed to fetch confession",
+        route: "GET /api/confessions/[id]"
+      });
     }
 
     const data = await response.json();
@@ -231,10 +225,9 @@ export async function GET(
       });
     }
 
-    console.error("Error fetching confession:", error);
-    return new Response(JSON.stringify({ message: "Internal server error" }), {
+    return createApiErrorResponse(error, {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      route: "GET /api/confessions/[id]"
     });
   }
 }

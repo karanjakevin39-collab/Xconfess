@@ -57,7 +57,14 @@ Operator checks for healthy flow:
   - Keep status as pending.
   - Requeue verification/reconciliation.
   - Do not manually refund unless pending exceeds SLA and failure is confirmed.
-- Escalate when pending exceeds agreed threshold (example: 30 minutes for tip verify).
+- Escalate when pending exceeds agreed threshold (TIP_VERIFICATION_STALE_THRESHOLD_MINUTES).
+
+### Stale Pending (SLA Breach)
+- Definition: pending tip verification exceeds the configured SLA threshold.
+- Action:
+  - Mark as `stale_pending` for operator visibility.
+  - Continue reconciliation attempts if the chain settles later.
+  - Do not auto-refund; follow evidence checklist before manual action.
 
 ### Failed
 - Definition: transaction rejected, malformed, expired, insufficient funds, or network failure.
@@ -110,6 +117,7 @@ Recovery:
 Symptoms:
 - Backend record remains `pending` beyond SLA.
 - Reconciliation not advancing status.
+ - Record is not promoted to `stale_pending` after threshold.
 
 Checks:
 1. Confirm worker/cron is running.
@@ -150,6 +158,91 @@ If any item is missing, pause and gather it first.
 3. Replay-safe verify:
    - Submit same verify payload twice and confirm duplicate-safe outcome.
 
+## Fixture-Based Verification
+
+The repository includes deterministic compatibility fixtures that tie contract event output to backend verification expectations. These fixtures ensure contract and backend changes don't silently break verification workflows.
+
+### Fixture Coverage
+
+**Anchor Events:**
+- `ANCHOR_FIXTURE_BASIC`: Standard confession anchoring
+- `ANCHOR_FIXTURE_ZERO_HASH`: Boundary case with all-zero hash
+- `ANCHOR_FIXTURE_MAX_TIMESTAMP`: Boundary case with maximum timestamp
+
+**Tip Settlement Events:**
+- `TIP_FIXTURE_BASIC`: Standard anonymous tip with proof
+- `TIP_FIXTURE_NO_PROOF`: Tip without proof metadata
+- `TIP_FIXTURE_LARGE_AMOUNT`: Large amount boundary case
+
+**Error Codes:**
+- Terminal errors (6001-6002, 6005, 6008): Invalid input, auth failure
+- Retryable errors (6003-6004, 6006-6007): Transient state (pause, rate limit, overflow)
+
+### Running Fixture Tests
+
+```bash
+# Contract fixtures
+cd xconfess-contracts
+cargo test --test backend_verification_fixtures
+
+# Backend stellar fixtures
+cd xconfess-backend
+npm test -- contract-event-fixtures.spec.ts
+
+# Backend tipping fixtures
+npm test -- contract-fixtures.spec.ts
+```
+
+### Detecting Fixture Drift
+
+If backend tests fail with fixture mismatches:
+1. Check event version (schema discriminator)
+2. Verify field values match fixture constants
+3. Confirm error code mappings are current
+4. Review contract changelog for breaking changes
+
+### Fixture Version Compatibility
+
+Fixtures include version markers (`FIXTURE_VERSION`) that must be incremented when:
+- Event payload structure changes
+- Error code mappings change
+- New fixture categories are added
+
+When fixture version changes, backend must implement migration logic to handle both old and new versions.
+
 ## Related Maintenance Work
 - `maintainer/issues/170-fix-backend-tip-verification-idempotency-replay.md`
 - `maintainer/issues/173-feat-backend-chain-reconciliation-worker.md`
+
+## Metrics & Observability (Reconciliation Lag)
+
+As per Issue #783, the backend emits bounded metrics to track the age of pending records. This allows operators to differentiate between "normal network delay" and "stuck records."
+
+### 1. Metric: `reconciliation_lag`
+- **Fields:**
+    - `type`: `anchor` | `tip`
+    - `confessionId`: UUID of the confession (for DB cross-referencing).
+    - `txHash`: Truncated Stellar hash (for blockchain audit).
+    - `lagSeconds`: Integer count of seconds since record creation.
+    - `isStale`: Boolean (true if > 300s).
+
+### 2. Operational Thresholds
+| Lag Time | Status | Operator Response |
+| :--- | :--- | :--- |
+| < 60s | **Healthy** | None (Standard Stellar consensus). |
+| 60s - 300s | **Warning** | Monitor for network-wide congestion. |
+| > 300s | **Critical** | Record is **Stale**. Follow "Stuck Pending Records" playbook. |
+
+### 3. Log Example (JSON)
+```json
+{
+  "level": "info",
+  "metric": "reconciliation_lag",
+  "type": "anchor",
+  "confessionId": "conf_882",
+  "txHash": "GC7A...234",
+  "lagSeconds": 450,
+  "isStale": true,
+  "message": "[METRIC] anchor reconciliation lag: 450s"
+}
+- `maintainer/issues/223-fix-contracts-add-backend-verification-compatibility-fixtures.md`

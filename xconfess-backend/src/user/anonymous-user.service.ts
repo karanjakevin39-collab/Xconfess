@@ -69,6 +69,14 @@ export class AnonymousUserService {
     return newAnon;
   }
 
+  async getAnonIdsForUser(userId: number): Promise<string[]> {
+    const links = await this.userAnonRepo.find({
+      where: { userId },
+      select: ['anonymousUserId'],
+    });
+    return links.map((link) => link.anonymousUserId);
+  }
+
   async cleanupExpiredSessions(sessionWindowHours: number = 24): Promise<void> {
     const cutoff = new Date();
     cutoff.setHours(cutoff.getHours() - sessionWindowHours);

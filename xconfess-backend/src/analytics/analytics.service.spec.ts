@@ -5,10 +5,7 @@ import { Reaction } from '../reaction/entities/reaction.entity';
 import { User } from '../user/entities/user.entity';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
 import { CacheService } from '../cache/cache.service';
-import {
-  toWindowBoundaries,
-  TrendingWindow,
-} from '../types/analytics.types';
+import { toWindowBoundaries, TrendingWindow } from '../types/analytics.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -394,8 +391,8 @@ describe('toWindowBoundaries()', () => {
   it('REGRESSION: consecutive 7-day windows share no overlap at the boundary midnight', () => {
     // Window A ends at midnight of 2026-03-27; Window B starts at the same instant.
     const windowA = toWindowBoundaries(7, REF);
-    // Shift REF forward by 7 days to get the next window
-    const nextRef = new Date(REF.getTime() + 7 * 24 * 60 * 60 * 1000);
+    // Shift REF so the next rolling window starts at windowA.endAt.
+    const nextRef = new Date(REF.getTime() + 8 * 24 * 60 * 60 * 1000);
     const windowB = toWindowBoundaries(7, nextRef);
 
     // windowA.endAt === windowB.startAt (shared boundary)
@@ -418,6 +415,8 @@ describe('toWindowBoundaries()', () => {
     // endAt should be UTC midnight of tomorrow, so it must be in the future
     expect(endAt.getTime()).toBeGreaterThan(before);
     // and no more than 2 days out from `after`
-    expect(endAt.getTime()).toBeLessThanOrEqual(after + 2 * 24 * 60 * 60 * 1000);
+    expect(endAt.getTime()).toBeLessThanOrEqual(
+      after + 2 * 24 * 60 * 60 * 1000,
+    );
   });
 });

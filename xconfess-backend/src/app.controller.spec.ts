@@ -7,10 +7,6 @@ describe('AppController', () => {
   beforeEach(() => {
     appController = new AppController(
       new AppService(),
-      { check: jest.fn() } as any,
-      { pingCheck: jest.fn() } as any,
-      { isHealthy: jest.fn() } as any,
-      { isHealthy: jest.fn() } as any,
       { getDiagnostics: jest.fn() } as any,
     );
   });

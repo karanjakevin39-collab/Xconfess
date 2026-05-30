@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
-import { PaginationDto } from '../../common/pagination/pagination.dto';
+import { IsEnum, IsOptional, IsBoolean } from 'class-validator';
+import { CursorPaginationDto } from '../../common/pagination/cursor-pagination.dto';
+import { Transform } from 'class-transformer';
 
 export enum CommentSortField {
   CREATED_AT = 'createdAt',
@@ -16,17 +17,19 @@ export enum SortOrder {
  * Query params for GET /confessions/:id/comments.
  * Supports both cursor-based and offset-based pagination.
  */
-export class GetCommentsQueryDto extends PaginationDto {
+export class GetCommentsQueryDto extends CursorPaginationDto {
   @ApiPropertyOptional({
-    description:
-      'Cursor for stable pagination. Base64 encoded JSON with id and timestamp.',
-    example:
-      'eyJpZCI6MTIzLCJjcmVhdGVkQXQiOiIyMDI0LTAxLTAxVDAwOjAwOjAwLjAwMFoifQ==',
+    description: '1-indexed page number for legacy offset pagination.',
+    example: 1,
   })
   @IsOptional()
-  @IsString()
-  cursor?: string;
+  @Transform(({ value }) => parseInt(value))
+  page?: number = 1;
 
+  @ApiPropertyOptional({
+    enum: CommentSortField,
+    default: CommentSortField.CREATED_AT,
+  })
   @ApiPropertyOptional({
     enum: CommentSortField,
     default: CommentSortField.CREATED_AT,

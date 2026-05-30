@@ -1,4 +1,4 @@
-# xconfess-contract
+# xconfess-contracts
 
 Soroban smart contract for the XConfess platform. Provides tamper-proof
 on-chain anchoring of anonymous confession hashes on the Stellar network.
@@ -75,7 +75,7 @@ After installing, return to the **monorepo root** and run:
 npm install
 ```
 
-npm workspaces will resolve `@xconfess/backend` and `@xconfess/contract`
+npm workspaces will resolve `xconfess-backend` and `xconfess-contracts`
 together. The contract workspace has no npm dependencies of its own —
 `npm install` is a no-op for it, but the presence of `package.json` lets
 npm scripts at the root delegate to it uniformly.
@@ -85,7 +85,7 @@ npm scripts at the root delegate to it uniformly.
 ## Project structure
 
 ```
-xconfess-contract/
+xconfess-contracts/
 ├── Cargo.toml                          # Rust package manifest and build profile
 ├── package.json                        # npm shim — delegates all scripts to cargo
 ├── README.md                           # This file
@@ -124,7 +124,7 @@ This command:
 # From monorepo root
 npm run contract:build
 
-# From xconfess-contract/ directly
+# From xconfess-contracts/ directly
 cargo build --target wasm32-unknown-unknown
 ```
 
@@ -134,14 +134,14 @@ cargo build --target wasm32-unknown-unknown
 # From monorepo root
 npm run contract:build:release
 
-# From xconfess-contract/ directly
+# From xconfess-contracts/ directly
 cargo build --release --target wasm32-unknown-unknown
 ```
 
 The release WASM is written to:
 
 ```
-xconfess-contract/target/wasm32-unknown-unknown/release/xconfess_contract.wasm
+xconfess-contracts/target/wasm32-unknown-unknown/release/confession_anchor.wasm
 ```
 
 ### Optimise WASM binary (optional — reduces upload fees)
@@ -149,10 +149,10 @@ xconfess-contract/target/wasm32-unknown-unknown/release/xconfess_contract.wasm
 After a release build, run the Stellar CLI optimiser to strip unused sections:
 
 ```bash
-npm run optimize --workspace=xconfess-contract
+npm run optimize --workspace=xconfess-contracts
 # or:
 stellar contract optimize \
-  --wasm target/wasm32-unknown-unknown/release/xconfess_contract.wasm
+  --wasm target/wasm32-unknown-unknown/release/confession_anchor.wasm
 ```
 
 The optimised file is written next to the original with an `.optimized.wasm`
@@ -168,7 +168,7 @@ suffix.
 # From monorepo root
 npm run contract:test
 
-# From xconfess-contract/ directly
+# From xconfess-contracts/ directly
 cargo test
 ```
 
@@ -188,7 +188,7 @@ test result: ok. 23 passed; 0 failed; 0 ignored
 # From monorepo root
 npm run contract:test:integration
 
-# From xconfess-contract/ directly
+# From xconfess-contracts/ directly
 cargo test --test confession_moderation
 cargo test --test access_control
 ```
@@ -196,7 +196,7 @@ cargo test --test access_control
 ### Tests with output (useful for gas figures)
 
 ```bash
-npm run test:verbose --workspace=xconfess-contract
+npm run test:verbose --workspace=xconfess-contracts
 # or:
 cargo test -- --nocapture
 ```
@@ -208,8 +208,8 @@ cargo test -- --nocapture
 cargo install cargo-tarpaulin
 
 # Run
-npm run test:coverage --workspace=xconfess-contract
-# Coverage report written to xconfess-contract/coverage/lcov.info
+npm run test:coverage --workspace=xconfess-contracts
+# Coverage report written to xconfess-contracts/coverage/lcov.info
 ```
 
 ---
@@ -253,6 +253,11 @@ The deploy step writes network metadata to `deployments/<network>.json`, includi
 - crate versions
 - wasm SHA-256 hashes
 
+See [`deployments/README.md`](../deployments/README.md) for the deployment
+metadata naming convention, commit policy, and redacted example. See
+[`docs/contract-release-and-upgrade-runbook.md`](../docs/contract-release-and-upgrade-runbook.md)
+for checksum review and post-deployment verification.
+
 ### Prerequisites for deployment
 
 1. Generate or import a Stellar keypair:
@@ -280,7 +285,7 @@ Or directly:
 
 ```bash
 stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/xconfess_contract.wasm \
+  --wasm target/wasm32-unknown-unknown/release/confession_anchor.wasm \
   --network testnet \
   --source my-deployer-key
 ```
@@ -295,13 +300,20 @@ STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 
 ### Deploy to mainnet
 
+Mainnet deployment is allowed only after the same commit has been deployed and
+verified on testnet. Before running this command, complete the mainnet safety
+gate in
+[`docs/contract-release-and-upgrade-runbook.md`](../docs/contract-release-and-upgrade-runbook.md#mainnet-safety-gate)
+and record approvals from platform, security, and release owners.
+
 ```bash
-./scripts/contracts-release.sh build
-./scripts/contracts-release.sh deploy --network mainnet --source my-mainnet-key
+./scripts/contracts-release.sh deploy --network public --source my-mainnet-key
 ```
 
 > **Warning:** Mainnet deployments are permanent and incur real XLM fees.
-> Always test on testnet first.
+> Keep the previous `deployments/<network>.json` ready for rollback, and use
+> [`docs/contract-signer-rotation-runbook.md`](../docs/contract-signer-rotation-runbook.md)
+> for contracts with pause controls.
 
 ---
 

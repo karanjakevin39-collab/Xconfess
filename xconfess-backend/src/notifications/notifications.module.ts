@@ -1,13 +1,18 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { BullModule } from '@nestjs/bull';
-import { ConfigModule } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
 import { Notification } from './entities/notification.entity';
 import { NotificationPreference } from './entities/notification-preference.entity';
 import { NotificationService } from './services/notification.service';
 import { EmailNotificationService } from './services/email-notification.service';
 import { NotificationController } from './notifications.controller';
-import { NotificationProcessor, NOTIFICATION_QUEUE, NOTIFICATION_DLQ } from './processors/notification.processor';
+import {
+  NotificationProcessor,
+  NOTIFICATION_QUEUE,
+  NOTIFICATION_DLQ,
+} from './processors/notification.processor';
 import { NotificationGateway } from './gateways/notification.gateway';
 import { DlqAdminController } from './dlq-admin.controller';
 import { WebSocketLogger } from '../websocket/websocket.logger';
@@ -22,7 +27,12 @@ import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Notification, NotificationPreference, OutboxEvent, User]),
+    TypeOrmModule.forFeature([
+      Notification,
+      NotificationPreference,
+      OutboxEvent,
+      User,
+    ]),
     BullModule.registerQueue({
       name: NOTIFICATION_QUEUE,
       defaultJobOptions: {
@@ -43,6 +53,14 @@ import { EmailModule } from '../email/email.module';
       },
     }),
     ConfigModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get('JWT_SECRET'),
+        signOptions: { expiresIn: '1d' },
+      }),
+    }),
     AuditLogModule,
     LoggerModule,
     EmailModule,
@@ -58,6 +76,6 @@ import { EmailModule } from '../email/email.module';
     RecipientResolver,
     JobManagementService,
   ],
-  exports: [NotificationService, RecipientResolver],
+  exports: [NotificationService, RecipientResolver, JobManagementService],
 })
 export class NotificationsModule {}

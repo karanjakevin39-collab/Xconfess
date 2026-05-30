@@ -130,15 +130,6 @@ jest.mock('../MetricsOverview', () => ({
   ),
 }));
 
-jest.mock('../ErrorState', () => ({
-  default: ({ title, onRetry }: { title: string; onRetry: () => void }) => (
-    <div data-testid="error-state">
-      <h3>{title}</h3>
-      <button onClick={onRetry} data-testid="retry-button">Retry</button>
-    </div>
-  ),
-}));
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Suite
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +284,7 @@ describe('TrendingDashboard', () => {
       render(<TrendingDashboard />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('retry-button')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
       });
     });
 
@@ -314,7 +305,7 @@ describe('TrendingDashboard', () => {
       });
 
       // Click retry
-      fireEvent.click(screen.getByTestId('retry-button'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       // Should load data after retry
       await waitFor(() => {
@@ -340,7 +331,7 @@ describe('TrendingDashboard', () => {
       });
 
       // First retry
-      fireEvent.click(screen.getByTestId('retry-button'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       // Second error
       await waitFor(() => {
@@ -348,7 +339,7 @@ describe('TrendingDashboard', () => {
       });
 
       // Second retry
-      fireEvent.click(screen.getByTestId('retry-button'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       // Should succeed
       await waitFor(() => {
@@ -504,7 +495,7 @@ describe('TrendingDashboard', () => {
       });
 
       // Retry
-      fireEvent.click(screen.getByTestId('retry-button'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       // Success
       await waitFor(() => {
@@ -526,7 +517,7 @@ describe('TrendingDashboard', () => {
       });
 
       // Retry
-      fireEvent.click(screen.getByTestId('retry-button'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       // Second error
       await waitFor(() => {
@@ -661,9 +652,10 @@ describe('TrendingDashboard', () => {
 
       render(<TrendingDashboard />);
 
-      // Should handle gracefully (may show error or empty state)
-      // Just ensure no crash
-      expect(screen.queryByTestId('error-state') ?? screen.queryByText('No trending confessions yet')).toBeTruthy();
+      // Should handle gracefully - verify it renders error state
+      await waitFor(() => {
+        expect(screen.queryByText('Failed to Load Analytics') ?? screen.queryByText('No trending confessions yet')).toBeTruthy();
+      });
     });
   });
 
@@ -676,7 +668,7 @@ describe('TrendingDashboard', () => {
       render(<TrendingDashboard />);
 
       await waitFor(() => {
-        const retryButton = screen.getByTestId('retry-button');
+        const retryButton = screen.getByRole('button', { name: 'Retry' });
         expect(retryButton).toBeEnabled();
       });
     });

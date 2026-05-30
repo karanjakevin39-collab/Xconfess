@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Lock, Heart, Zap, X } from "lucide-react";
+import { Heart, Lock, Sparkles, X, Zap } from "lucide-react";
 
 interface Props {
   onStart: () => void;
   onSkip: () => void;
-  onClose?: () => void; // optional: triggered if modal is closed
+  onClose?: () => void;
 }
 
 export const WelcomeScreen = ({ onStart, onSkip, onClose }: Props) => {
@@ -18,22 +18,22 @@ export const WelcomeScreen = ({ onStart, onSkip, onClose }: Props) => {
     {
       icon: Lock,
       title: "Anonymous & Safe",
-      description: "Share freely without revealing your identity",
+      description: "Share freely without revealing your identity.",
     },
     {
       icon: Heart,
       title: "Community Support",
-      description: "Connect with others through reactions and empathy",
+      description: "React with empathy and discover honest conversations.",
     },
     {
       icon: Sparkles,
       title: "Blockchain Powered",
-      description: "Optional Stellar integration for permanent storage",
+      description: "Optional Stellar anchoring for proof-of-existence.",
     },
     {
       icon: Zap,
       title: "Simple & Fast",
-      description: "Easy to use interface for quick confessions",
+      description: "A focused composer built for quick, thoughtful posting.",
     },
   ];
 
@@ -49,65 +49,76 @@ export const WelcomeScreen = ({ onStart, onSkip, onClose }: Props) => {
 
   const handleClose = () => {
     setShow(false);
-    if (onClose) onClose(); // start tour if user closes modal
+    onClose?.();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="bg-zinc-900 rounded-2xl max-w-lg w-full p-6 relative shadow-lg">
-        {/* Close button */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+      <div className="luxury-panel relative w-full max-w-2xl overflow-hidden rounded-[28px] p-7">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-36 bg-[radial-gradient(circle_at_top,var(--accent-soft),transparent_60%)]" />
+
         <button
-          className="absolute top-3 right-3 text-gray-400 hover:text-white"
+          className="absolute right-4 top-4 rounded-full p-2 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
           onClick={handleClose}
+          aria-label="Close onboarding"
         >
-          <X className="w-5 h-5" />
+          <X className="h-5 w-5" />
         </button>
 
-        {/* Header */}
-        <h2 className="text-2xl font-bold text-white mb-2">
-          Welcome to XConfess
-        </h2>
-        <p className="text-gray-300 mb-4">
-          Your safe space for anonymous confessions
-        </p>
+        <div className="relative space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+            Welcome
+          </p>
+          <h2 className="text-3xl font-semibold tracking-tight text-zinc-950">
+            Welcome to XConfess
+          </h2>
+          <p className="max-w-xl text-sm leading-7 text-zinc-600 sm:text-base">
+            A calmer space for anonymous confessions, supportive reactions, and
+            optional Stellar-backed permanence when you need it.
+          </p>
+        </div>
 
-        {/* Features */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <div className="relative mb-7 mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {features.map((feature) => {
             const Icon = feature.icon;
             return (
               <div
                 key={feature.title}
-                className="flex items-start gap-3 bg-zinc-800 p-3 rounded-lg"
+                className="flex items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-muted)] p-4"
               >
-                <Icon className="w-6 h-6 text-purple-500 mt-1" />
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/75 shadow-sm">
+                  <Icon className="h-5 w-5 text-[var(--primary-deep)]" />
+                </div>
                 <div>
-                  <h3 className="text-white font-semibold">{feature.title}</h3>
-                  <p className="text-gray-300 text-sm">{feature.description}</p>
+                  <h3 className="font-semibold text-zinc-950">
+                    {feature.title}
+                  </h3>
+                  <p className="text-sm leading-6 text-zinc-600">
+                    {feature.description}
+                  </p>
                 </div>
               </div>
             );
           })}
         </div>
 
-        {/* Action buttons */}
-        <div className="flex gap-3">
+        <div className="relative flex flex-col gap-3 sm:flex-row">
           <button
             onClick={handleStart}
-            className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition"
+            className="flex-1 rounded-full bg-zinc-950 py-3 text-white transition hover:bg-zinc-800"
           >
             Start Tour
           </button>
           <button
             onClick={handleSkip}
-            className="flex-1 border border-gray-600 text-gray-300 hover:bg-zinc-800 py-2 rounded-lg transition"
+            className="flex-1 rounded-full border border-zinc-300 py-3 text-zinc-700 transition hover:bg-zinc-100"
           >
             Skip & Explore
           </button>
         </div>
 
-        <p className="text-gray-500 text-xs mt-3 text-center">
-          You can restart the tour anytime from settings
+        <p className="mt-4 text-center text-xs text-zinc-500">
+          You can restart the tour anytime from settings.
         </p>
       </div>
     </div>

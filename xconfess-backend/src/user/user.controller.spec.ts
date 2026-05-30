@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UserController } from './user.controller';
 import { UserService } from './user.service';
 import { AuthService } from '../auth/auth.service';
+import { ConfessionService } from '../confession/confession.service';
 import { User, UserRole } from './entities/user.entity';
 import {
   ConflictException,
@@ -71,6 +72,10 @@ describe('UserController', () => {
         {
           provide: AuthService,
           useValue: mockAuthService,
+        },
+        {
+          provide: ConfessionService,
+          useValue: {},
         },
       ],
     }).compile();

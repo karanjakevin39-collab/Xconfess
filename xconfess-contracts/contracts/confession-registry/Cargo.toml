@@ -12,3 +12,18 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+anonymous-tipping = { path = "../anonymous-tipping" }
+confession-anchor = { path = "../confession-anchor" }
+reputation-badges = { path = "../reputation-badges" }
+
+[[test]]
+name = "storage_compat"
+path = "../tests/storage_compat_tests.rs"
+
+[[test]]
+name = "event_nonce_ordering"
+path = "../tests/event_nonce_ordering.test.rs"
+
+[[test]]
+name = "pagination"
+path = "../tests/pagination.rs"

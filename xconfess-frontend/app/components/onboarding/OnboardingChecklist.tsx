@@ -1,12 +1,12 @@
 "use client";
 
-import { useOnboardingStore } from "@/app/lib/store/onboardingStore";
-import { Check, ChevronDown, ChevronUp, Trophy } from "lucide-react";
 import { useState } from "react";
+import { Check, ChevronDown, ChevronUp, Trophy } from "lucide-react";
+import { useOnboardingStore } from "@/app/lib/store/onboardingStore";
 
 export const OnboardingChecklist = () => {
   const { tutorialSteps, getTutorialProgress } = useOnboardingStore();
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const progress = getTutorialProgress();
   const completedCount = tutorialSteps.filter((s) => s.completed).length;
@@ -16,77 +16,68 @@ export const OnboardingChecklist = () => {
   if (isComplete && !isExpanded) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 w-80 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg overflow-hidden z-50">
-      {/* Header */}
+    <div className="fixed bottom-5 right-5 z-40 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-[24px] border border-zinc-200 bg-white/92 shadow-[0_28px_80px_-45px_rgba(15,23,42,0.55)] backdrop-blur-xl">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between p-4 hover:bg-zinc-800 transition-colors"
+        className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-zinc-50"
       >
         <div>
-          <h4 className="font-semibold text-white">Getting Started</h4>
-          <p className="text-xs text-gray-400">
+          <h4 className="font-semibold text-zinc-950">Getting Started</h4>
+          <p className="text-xs text-zinc-500">
             {completedCount} of {totalCount} completed
           </p>
         </div>
-        <div>
-          {isExpanded ? (
-            <ChevronUp className="w-5 h-5 text-gray-300" />
-          ) : (
-            <ChevronDown className="w-5 h-5 text-gray-300" />
-          )}
-        </div>
+        {isExpanded ? (
+          <ChevronUp className="h-5 w-5 text-zinc-500" />
+        ) : (
+          <ChevronDown className="h-5 w-5 text-zinc-500" />
+        )}
       </button>
 
-      {/* Progress bar */}
       {isExpanded && (
         <>
-          <div className="h-2 bg-zinc-700 rounded-full mx-4 mt-2">
+          <div className="mx-4 mt-1 h-2 rounded-full bg-zinc-200">
             <div
-              className="h-2 bg-green-500 rounded-full"
+              className="h-2 rounded-full bg-zinc-900 transition-all"
               style={{ width: `${progress}%` }}
             />
           </div>
 
-          {/* Tutorial Steps */}
-          <div className="p-4 space-y-2">
+          <div className="space-y-2 p-4">
             {tutorialSteps.map((step) => (
               <div
                 key={step.id}
-                className={`flex items-start gap-3 p-3 rounded-lg border transition-all ${
+                className={`flex items-start gap-3 rounded-2xl border p-3 transition-all ${
                   step.completed
-                    ? "bg-green-500/10 border-green-500/20"
-                    : "bg-zinc-800/50 border-zinc-700"
+                    ? "border-emerald-200 bg-emerald-50"
+                    : "border-zinc-200 bg-zinc-50/80"
                 }`}
               >
-                {/* Icon */}
-                <div className="w-6 h-6 flex items-center justify-center">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white shadow-sm">
                   {step.completed ? (
-                    <Check className="text-green-500 w-5 h-5" />
+                    <Check className="h-5 w-5 text-emerald-600" />
                   ) : (
-                    step.icon
+                    <span aria-hidden="true">{step.icon}</span>
                   )}
                 </div>
 
-                {/* Title & description */}
                 <div className="flex-1">
-                  <h5 className="text-white font-medium">{step.title}</h5>
-                  <p className="text-gray-400 text-sm">{step.description}</p>
+                  <h5 className="font-medium text-zinc-900">{step.title}</h5>
+                  <p className="text-sm text-zinc-500">{step.description}</p>
                 </div>
 
-                {/* Required badge */}
                 {step.required && !step.completed && (
-                  <span className="text-xs font-semibold text-red-400 bg-red-900/30 px-2 py-0.5 rounded">
+                  <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-600">
                     Required
                   </span>
                 )}
               </div>
             ))}
 
-            {/* Completion message */}
             {isComplete && (
-              <div className="flex items-center gap-2 mt-3 p-3 bg-green-500/20 rounded-lg text-green-400 font-semibold">
-                <Trophy className="w-5 h-5" /> 🎉 Congratulations! You've
-                completed all onboarding steps
+              <div className="mt-3 flex items-center gap-2 rounded-2xl bg-emerald-50 p-3 font-semibold text-emerald-700">
+                <Trophy className="h-5 w-5" />
+                Congratulations! You've completed all onboarding steps.
               </div>
             )}
           </div>

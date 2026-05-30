@@ -1,3 +1,4 @@
+import { buildProxyErrorResponse, internalProxyErrorResponse } from "@/app/lib/utils/proxyError";
 import { getApiBaseUrl } from "@/app/lib/config";
 
 const BASE_API_URL = getApiBaseUrl();
@@ -108,16 +109,8 @@ export async function GET(
         });
       }
 
-      const err = await response.json().catch(() => ({}));
-      return new Response(
-        JSON.stringify({
-          message: err.message || "Failed to fetch comments",
-        }),
-        {
-          status: response.status,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      const err = await response.json().catch(() => ({} as { message?: string }));
+      return buildProxyErrorResponse(err.message || "Failed to fetch comments", response.status, { route: "GET /api/comments/by-confession/[confessionId]" });
     }
 
     const data = await response.json();
@@ -230,10 +223,6 @@ export async function GET(
       });
     }
 
-    console.error("Error fetching comments:", error);
-    return new Response(JSON.stringify({ message: "Internal server error" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return internalProxyErrorResponse({ route: "GET /api/comments/by-confession/[confessionId]" }, error);
   }
 }

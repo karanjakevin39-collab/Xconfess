@@ -56,14 +56,17 @@ export async function addReaction(
 
   try {
     const response = await fetch(
-      `${API_BASE}/api/confessions/${confessionId}/react`,
+      `${API_BASE}/api/reactions`,
       {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
           "x-anonymous-user-id": anonymousUserId,
         },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify({ 
+          confessionId,
+          type,
+        }),
         signal,
       }
     );

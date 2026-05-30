@@ -15,6 +15,7 @@ import { StellarInvokeContractGuard } from './guards/stellar-invoke-contract.gua
 import { UserService } from '../user/user.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditActionType } from '../audit-log/audit-log.entity';
+import { StellarConfigService } from './stellar-config.service';
 
 describe('StellarController authz', () => {
   let app: INestApplication;
@@ -24,14 +25,14 @@ describe('StellarController authz', () => {
     invocationFromAllowlistedDto: jest.Mock;
   };
   let auditLogMock: { log: jest.Mock };
+  let stellarConfigMock: { getContractId: jest.Mock };
 
   const JWT_SECRET = 'JWT_TEST_SECRET_123';
 
   let SIGNER_SECRET: string;
   let SIGNER_PUBLIC: string;
 
-  const VALID_HASH =
-    'a'.repeat(64);
+  const VALID_HASH = 'a'.repeat(64);
 
   const makePayload = (opts: {
     sub: number;
@@ -59,6 +60,9 @@ describe('StellarController authz', () => {
     SIGNER_PUBLIC = signerKp.publicKey();
 
     auditLogMock = { log: jest.fn().mockResolvedValue(undefined) };
+    stellarConfigMock = {
+      getContractId: jest.fn().mockReturnValue('CCONTRACT'),
+    };
 
     contractServiceMock = {
       invokeContract: jest.fn().mockResolvedValue({
@@ -103,10 +107,13 @@ describe('StellarController authz', () => {
         },
         { provide: ContractService, useValue: contractServiceMock },
         { provide: AuditLogService, useValue: auditLogMock },
+        { provide: StellarConfigService, useValue: stellarConfigMock },
         {
           provide: UserService,
           useValue: {
-            findById: jest.fn().mockResolvedValue({ role: UserRole.ADMIN }),
+            findById: jest.fn().mockImplementation(async (id: number) => ({
+              role: id === 2 ? UserRole.USER : UserRole.ADMIN,
+            })),
           },
         },
       ],
@@ -129,6 +136,7 @@ describe('StellarController authz', () => {
     contractServiceMock.invokeContract.mockClear();
     contractServiceMock.invocationFromAllowlistedDto.mockClear();
     auditLogMock.log.mockClear();
+    stellarConfigMock.getContractId.mockClear();
   });
 
   it('returns 401 when Authorization header is missing', async () => {
@@ -139,8 +147,14 @@ describe('StellarController authz', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 when required scope claim is missing', async () => {
-    const token = jwtService.sign(makePayload({ sub: 2, scopes: [] }));
+  it('returns 403 and audits when the caller is not an admin', async () => {
+    const token = jwtService.sign(
+      makePayload({
+        sub: 2,
+        role: UserRole.USER,
+        scopes: ['stellar:invoke-contract:anchor_confession'],
+      }),
+    );
 
     const res = await request(app.getHttpServer())
       .post('/stellar/invoke-contract')
@@ -149,12 +163,59 @@ describe('StellarController authz', () => {
 
     expect(res.status).toBe(403);
     expect(contractServiceMock.invokeContract).not.toHaveBeenCalled();
-    expect(auditLogMock.log).not.toHaveBeenCalled();
+    expect(auditLogMock.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: AuditActionType.STELLAR_CONTRACT_INVOCATION,
+        metadata: expect.objectContaining({
+          outcome: 'denied',
+          denialReason: 'admin_role_required',
+          contractId: 'CCONTRACT',
+          functionName: 'anchor_confession',
+          sourceAccount: SIGNER_PUBLIC,
+        }),
+      }),
+    );
+  });
+
+  it('returns 403 and audits when the admin lacks the operation scope', async () => {
+    const token = jwtService.sign(
+      makePayload({
+        sub: 1,
+        role: UserRole.ADMIN,
+        scopes: ['stellar:invoke-contract:unrelated'],
+      }),
+    );
+
+    const res = await request(app.getHttpServer())
+      .post('/stellar/invoke-contract')
+      .set('Authorization', `Bearer ${token}`)
+      .send(allowlistedBody());
+
+    expect(res.status).toBe(403);
+    expect(contractServiceMock.invokeContract).not.toHaveBeenCalled();
+    expect(auditLogMock.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: AuditActionType.STELLAR_CONTRACT_INVOCATION,
+        metadata: expect.objectContaining({
+          outcome: 'denied',
+          denialReason: 'operation_scope_denied',
+          contractId: 'CCONTRACT',
+          functionName: 'anchor_confession',
+          requiredScopes: expect.arrayContaining([
+            'stellar:invoke-contract:anchor_confession',
+          ]),
+        }),
+      }),
+    );
   });
 
   it('succeeds when scope is present and payload matches allowlist', async () => {
     const token = jwtService.sign(
-      makePayload({ sub: 1, scopes: ['stellar:invoke-contract'] }),
+      makePayload({
+        sub: 1,
+        role: UserRole.ADMIN,
+        scopes: ['stellar:invoke-contract:anchor_confession'],
+      }),
     );
 
     const res = await request(app.getHttpServer())
@@ -163,9 +224,9 @@ describe('StellarController authz', () => {
       .send(allowlistedBody());
 
     expect([200, 201]).toContain(res.status);
-    expect(contractServiceMock.invocationFromAllowlistedDto).toHaveBeenCalledTimes(
-      1,
-    );
+    expect(
+      contractServiceMock.invocationFromAllowlistedDto,
+    ).toHaveBeenCalledTimes(1);
     expect(contractServiceMock.invokeContract).toHaveBeenCalledTimes(1);
     expect(res.body).toHaveProperty('hash', 'tx-hash');
     expect(auditLogMock.log).toHaveBeenCalledWith(
@@ -174,15 +235,25 @@ describe('StellarController authz', () => {
         metadata: expect.objectContaining({
           outcome: 'success',
           stellarOperation: 'anchor_confession',
+          contractId: 'CCONTRACT',
+          functionName: 'anchor_confession',
+          sourceAccount: SIGNER_PUBLIC,
           transactionHash: 'tx-hash',
         }),
       }),
+    );
+    expect(auditLogMock.log.mock.calls[0][0].metadata).not.toHaveProperty(
+      'confessionHash',
     );
   });
 
   it('returns 400 when sourceAccount is not the server signer', async () => {
     const token = jwtService.sign(
-      makePayload({ sub: 1, scopes: ['stellar:invoke-contract'] }),
+      makePayload({
+        sub: 1,
+        role: UserRole.ADMIN,
+        scopes: ['stellar:invoke-contract:anchor_confession'],
+      }),
     );
 
     const res = await request(app.getHttpServer())
@@ -203,6 +274,8 @@ describe('StellarController authz', () => {
         metadata: expect.objectContaining({
           outcome: 'denied',
           denialReason: 'source_account_mismatch',
+          contractId: 'CCONTRACT',
+          functionName: 'anchor_confession',
         }),
       }),
     );
@@ -210,7 +283,11 @@ describe('StellarController authz', () => {
 
   it('returns 400 when confessionHash is not 64 hex chars', async () => {
     const token = jwtService.sign(
-      makePayload({ sub: 1, scopes: ['stellar:invoke-contract'] }),
+      makePayload({
+        sub: 1,
+        role: UserRole.ADMIN,
+        scopes: ['stellar:invoke-contract:anchor_confession'],
+      }),
     );
 
     const res = await request(app.getHttpServer())
@@ -228,7 +305,11 @@ describe('StellarController authz', () => {
 
   it('returns 400 when operation is not allowlisted', async () => {
     const token = jwtService.sign(
-      makePayload({ sub: 1, scopes: ['stellar:invoke-contract'] }),
+      makePayload({
+        sub: 1,
+        role: UserRole.ADMIN,
+        scopes: ['stellar:invoke-contract:anchor_confession'],
+      }),
     );
 
     const res = await request(app.getHttpServer())

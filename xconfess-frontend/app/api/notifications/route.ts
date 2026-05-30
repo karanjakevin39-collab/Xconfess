@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
+import { getApiBaseUrl } from "@/app/lib/config";
+
+const BACKEND_API_URL = getApiBaseUrl();
 
 export async function GET(request: NextRequest) {
+  const correlationId = request.headers.get("X-Correlation-ID") || "unknown";
+
   try {
     // Get auth token from headers
     const token = request.headers.get("authorization")?.replace("Bearer ", "");
@@ -14,7 +20,7 @@ export async function GET(request: NextRequest) {
 
     // Call your backend API
     const response = await fetch(
-      `${process.env.BACKEND_URL}/notifications?type=${type || ""}&isRead=${isRead || ""}&page=${page}&limit=${limit}`,
+      `${BACKEND_API_URL}/notifications?type=${type || ""}&isRead=${isRead || ""}&page=${page}&limit=${limit}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -23,16 +29,23 @@ export async function GET(request: NextRequest) {
     );
 
     if (!response.ok) {
-      throw new Error("Failed to fetch notifications");
+      const errData = await response.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: response.status,
+        correlationId,
+        fallbackMessage: "Failed to fetch notifications",
+        route: "GET /api/notifications",
+      });
     }
 
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("Error fetching notifications:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch notifications" },
-      { status: 500 }
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      correlationId,
+      route: "GET /api/notifications",
+    });
   }
 }
+

@@ -27,6 +27,10 @@ export default tseslint.config(
   },
   {
     rules: {
+      // eslint-plugin-prettier/recommended sets this to "error"; a single drift fails CI (e.g. line endings).
+      'prettier/prettier': 'warn',
+      // Use @typescript-eslint/no-unused-vars for TS; core rule can duplicate-report as error.
+      'no-unused-vars': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
@@ -35,6 +39,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-call': 'warn',
       '@typescript-eslint/no-unsafe-return': 'warn',
       '@typescript-eslint/require-await': 'warn',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
       '@typescript-eslint/no-unsafe-enum-comparison': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'warn',

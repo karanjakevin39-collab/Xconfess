@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SearchConfession } from "@/app/lib/types/search";
-import type { SearchFilters } from "@/app/lib/types/search";
+import type { SearchConfession, SearchFilters } from "@/app/lib/types/search";
 import { logError } from "@/app/lib/utils/errorHandler";
 
 const SEARCH_MAX_RETRIES = 3;
 const SEARCH_BASE_DELAY_MS = 400;
-
 const SEARCH_APPEND_ERROR_MESSAGE =
-  "Couldn’t load more results. Check your connection and try again.";
+  "Couldn't load more results. Check your connection and try again.";
+const DEV_BYPASS_AUTH_ENABLED =
+  process.env.NODE_ENV === "development" &&
+  process.env.NEXT_PUBLIC_DEV_BYPASS_AUTH === "true";
 
 interface UseSearchOptions {
   query: string;
@@ -55,15 +56,18 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
       reject(new DOMException("Aborted", "AbortError"));
       return;
     }
-    const id = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
+
     const onAbort = () => {
       clearTimeout(id);
       signal.removeEventListener("abort", onAbort);
       reject(new DOMException("Aborted", "AbortError"));
     };
+
+    const id = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -81,7 +85,12 @@ function isRetryableSearchHttpStatus(status: number): boolean {
 
 function userMessageForSearchFailure(status: number | null): string {
   if (status === null) {
-    return "We couldn’t load search results. Check your connection and try again.";
+    return DEV_BYPASS_AUTH_ENABLED
+      ? "Search is unavailable until the local backend is running."
+      : "We couldn't load search results. Check your connection and try again.";
+  }
+  if (DEV_BYPASS_AUTH_ENABLED && status >= 500) {
+    return "Search is unavailable until the local backend is running.";
   }
   if (status === 429) {
     return "Search is busy right now. Please wait a moment and try again.";
@@ -92,7 +101,7 @@ function userMessageForSearchFailure(status: number | null): string {
   if (status === 401 || status === 403) {
     return "You need to be signed in to search.";
   }
-  return "Search couldn’t be completed. Please try again.";
+  return "Search couldn't be completed. Please try again.";
 }
 
 async function fetchSearchWithRetry(
@@ -118,12 +127,23 @@ async function fetchSearchWithRetry(
     try {
       res = await fetch(url, { signal });
     } catch (fetchErr) {
-      logError(fetchErr, "useSearch", {
-        url: "/api/confessions/search",
-        attempt: attempt + 1,
-        phase: "network",
-        willRetry: attempt < SEARCH_MAX_RETRIES - 1,
-      });
+      if (DEV_BYPASS_AUTH_ENABLED) {
+        console.debug(
+          "Skipping expected local search network error while backend is offline.",
+          {
+            url: "/api/confessions/search",
+            attempt: attempt + 1,
+          }
+        );
+      } else {
+        logError(fetchErr, "useSearch", {
+          url: "/api/confessions/search",
+          attempt: attempt + 1,
+          phase: "network",
+          willRetry: attempt < SEARCH_MAX_RETRIES - 1,
+        });
+      }
+
       if (attempt === SEARCH_MAX_RETRIES - 1) {
         throw new Error(userMessageForSearchFailure(null));
       }
@@ -134,14 +154,25 @@ async function fetchSearchWithRetry(
       return (await res.json()) as Record<string, unknown>;
     }
 
-    logError(new Error(`search_upstream_${res.status}`), "useSearch", {
-      url: "/api/confessions/search",
-      httpStatus: res.status,
-      attempt: attempt + 1,
-      willRetry:
-        isRetryableSearchHttpStatus(res.status) &&
-        attempt < SEARCH_MAX_RETRIES - 1,
-    });
+    if (DEV_BYPASS_AUTH_ENABLED && res.status >= 500) {
+      console.debug(
+        "Skipping expected local search upstream error while backend is offline.",
+        {
+          url: "/api/confessions/search",
+          httpStatus: res.status,
+          attempt: attempt + 1,
+        }
+      );
+    } else {
+      logError(new Error(`search_upstream_${res.status}`), "useSearch", {
+        url: "/api/confessions/search",
+        httpStatus: res.status,
+        attempt: attempt + 1,
+        willRetry:
+          isRetryableSearchHttpStatus(res.status) &&
+          attempt < SEARCH_MAX_RETRIES - 1,
+      });
+    }
 
     const canRetry =
       isRetryableSearchHttpStatus(res.status) &&
@@ -166,7 +197,9 @@ export function useSearch({
   const [isLoading, setIsLoading] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [statusMeta, setStatusMeta] = useState<UseSearchResult["statusMeta"]>(null);
+  const [statusMeta, setStatusMeta] = useState<UseSearchResult["statusMeta"]>(
+    null
+  );
   const [retryTick, setRetryTick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const accumulatedRef = useRef<SearchConfession[]>([]);
@@ -196,16 +229,16 @@ export function useSearch({
       return;
     }
 
-    if (abortRef.current) abortRef.current.abort();
+    abortRef.current?.abort();
     abortRef.current = new AbortController();
     const { signal } = abortRef.current;
 
     const append = page > 1;
-
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("limit", "10");
     params.set("sort", filters.sort);
+
     if (debouncedQuery.trim()) params.set("q", debouncedQuery.trim());
     if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
     if (filters.dateTo) params.set("dateTo", filters.dateTo);
@@ -256,7 +289,10 @@ export function useSearch({
         const confessionList = list as SearchConfession[];
 
         if (append) {
-          accumulatedRef.current = [...accumulatedRef.current, ...confessionList];
+          accumulatedRef.current = [
+            ...accumulatedRef.current,
+            ...confessionList,
+          ];
         } else {
           accumulatedRef.current = confessionList;
         }
@@ -280,9 +316,7 @@ export function useSearch({
         if (cancelled) return;
 
         const userMessage =
-          e instanceof Error
-            ? e.message
-            : userMessageForSearchFailure(null);
+          e instanceof Error ? e.message : userMessageForSearchFailure(null);
 
         setError(append ? SEARCH_APPEND_ERROR_MESSAGE : userMessage);
         setStatusMeta(
@@ -296,6 +330,7 @@ export function useSearch({
               }
             : null
         );
+
         if (page === 1) {
           setResults([]);
           setTotal(0);

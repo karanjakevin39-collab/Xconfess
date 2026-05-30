@@ -4,6 +4,8 @@ import { AdminService } from './services/admin.service';
 import { ModerationService } from './services/moderation.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import { ModerationTemplateService } from '../comment/moderation-template.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 describe('AdminController', () => {
   let controller: AdminController;
@@ -31,6 +33,10 @@ describe('AdminController', () => {
     getAuditLogs: jest.fn(),
   };
 
+  const mockAuditLogService = {
+    findAll: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AdminController],
@@ -42,6 +48,14 @@ describe('AdminController', () => {
         {
           provide: ModerationService,
           useValue: mockModerationService,
+        },
+        {
+          provide: ModerationTemplateService,
+          useValue: {},
+        },
+        {
+          provide: AuditLogService,
+          useValue: mockAuditLogService,
         },
       ],
     })
@@ -84,6 +98,7 @@ describe('AdminController', () => {
       const result = await controller.resolveReport(
         '1',
         { resolutionNotes: 'test' },
+        1,
         req,
       );
 
@@ -91,6 +106,7 @@ describe('AdminController', () => {
         '1',
         1,
         'test',
+        undefined,
         req,
       );
     });
@@ -103,7 +119,7 @@ describe('AdminController', () => {
         status: 'dismissed',
       });
       const req = { user: { userId: '2' } } as any;
-      await controller.dismissReport('1', { resolutionNotes: 'nope' }, req);
+      await controller.dismissReport('1', { resolutionNotes: 'nope' }, 2, req);
       expect(adminService.dismissReport).toHaveBeenCalledWith(
         '1',
         2,
@@ -119,9 +135,10 @@ describe('AdminController', () => {
       const req = { user: { userId: '1' } } as any;
       const res = await controller.bulkResolveReports(
         { reportIds: ['a', 'b', 'c'] } as any,
+        1,
         req,
       );
-      expect(res).toEqual({ resolved: 3 });
+      expect(res).toEqual(3);
     });
   });
 
@@ -187,10 +204,30 @@ describe('AdminController', () => {
 
   describe('audit logs', () => {
     it('getAuditLogs calls moderation service', async () => {
-      mockModerationService.getAuditLogs.mockResolvedValue([[{ id: 'l1' }], 1]);
+      mockAuditLogService.findAll.mockResolvedValue({ data: [{ id: 'l1' }], total: 1 });
       const res = await controller.getAuditLogs();
       expect(res.total).toBe(1);
-      expect(moderationService.getAuditLogs).toHaveBeenCalled();
+      expect(mockAuditLogService.findAll).toHaveBeenCalled();
+    });
+  });
+
+  describe('route ownership — no duplicate admin/reports registration', () => {
+    it('AdminController is the sole owner of GET /admin/reports', () => {
+      const routes: { method: string; path: string }[] = Reflect.getMetadata(
+        'routes',
+        AdminController,
+      ) ?? [];
+      const reportListRoutes = routes.filter(
+        (r) => r.method === 'GET' && r.path?.includes('reports'),
+      );
+      // Duplicate path registration would surface multiple entries here
+      expect(reportListRoutes.length).toBeLessThanOrEqual(1);
+    });
+
+    it('AdminController has resolve and dismiss handlers for /admin/reports/:id', () => {
+      const proto = AdminController.prototype;
+      expect(typeof proto.resolveReport).toBe('function');
+      expect(typeof proto.dismissReport).toBe('function');
     });
   });
 });

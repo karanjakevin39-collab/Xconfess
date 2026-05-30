@@ -10,6 +10,42 @@ All HTTP routes are served under the global prefix:
 
 Example: `POST /auth/login` in code is reachable at `POST /api/auth/login`.
 
+## Error Handling
+
+The API uses standardized error codes and a consistent response shape for all modules.
+
+### Response Shape
+
+All non-2xx responses follow this structure:
+
+```json
+{
+  "status": number,
+  "code": "ERROR_CODE_STRING",
+  "message": "Human readable message",
+  "details": any,
+  "timestamp": "ISO-8601",
+  "path": "/api/...",
+  "requestId": "uuid"
+}
+```
+
+### Global Error Codes
+
+| Code | Description |
+|---|---|
+| `AUTH_UNAUTHORIZED` | Authentication required or failed. |
+| `AUTH_FORBIDDEN` | Insufficient permissions. |
+| `BAD_REQUEST` | Generic client error. |
+| `VALIDATION_FAILED` | Input validation failed. |
+| `NOT_FOUND` | Resource not found. |
+| `CONFLICT` | Resource state conflict. |
+| `THROTTLED` | Rate limit exceeded. |
+| `STELLAR_ERROR` | Error communicating with Stellar/Soroban. |
+| `INTERNAL_SERVER_ERROR` | Unexpected server error. |
+
+Refer to `src/common/errors/error-codes.ts` for the full catalog.
+
 ## Authentication and Authorization
 
 ### Auth split: `/users/*` vs `/auth/*`
@@ -177,6 +213,26 @@ or
 }
 ```
 
+### Moderation consistency guarantees
+
+The following moderation write flows are executed in a single database
+transaction and are atomic:
+
+- Admin report resolution and dismissal (`/api/admin/reports/:id/resolve`,
+  `/api/admin/reports/:id/dismiss`)
+- Admin bulk report resolution (`/api/admin/reports/bulk-resolve`)
+- Admin confession actions (`DELETE /api/admin/confessions/:id`,
+  `/api/admin/confessions/:id/hide`, `/api/admin/confessions/:id/unhide`)
+- Admin user moderation actions (`/api/admin/users/:id/ban`,
+  `/api/admin/users/:id/unban`)
+- Moderation webhook application (`POST /api/webhooks/moderation/results`)
+  where moderation log sync and confession moderation-state update are committed
+  together
+
+If any write in one of these flows fails (for example, audit log persistence
+or a downstream repository save), the whole transaction is rolled back and no
+partial moderation state is committed.
+
 ### 15) Notification preferences (`PUT /api/notifications/preferences`)
 
 ```json
@@ -253,8 +309,6 @@ The following list matches active `@Controller(...)` + method decorators.
 | POST | `/api/comments/:confessionId` |
 | GET | `/api/comments/by-confession/:confessionId` |
 | DELETE | `/api/comments/:id` |
-| POST | `/api/comments/admin/comments/:id/approve` |
-| POST | `/api/comments/admin/comments/:id/reject` |
 | POST | `/api/messages` |
 | POST | `/api/messages/reply` |
 | GET | `/api/messages/threads` |
@@ -279,8 +333,6 @@ The following list matches active `@Controller(...)` + method decorators.
 | PATCH | `/api/admin/users/:id/unban` |
 | GET | `/api/admin/analytics` |
 | GET | `/api/admin/audit-logs` |
-| GET | `/api/admin/reports` (second controller also defines this) |
-| PATCH | `/api/admin/reports/:id/resolve` (second controller also defines this) |
 | GET | `/api/admin/moderation/pending` |
 | POST | `/api/admin/moderation/review/:id` |
 | GET | `/api/admin/moderation/stats` |
@@ -293,6 +345,8 @@ The following list matches active `@Controller(...)` + method decorators.
 | GET | `/api/admin/notifications/dlq` |
 | POST | `/api/admin/notifications/dlq/:jobId/replay` |
 | POST | `/api/admin/notifications/dlq/replay` |
+| POST | `/api/admin/comments/:id/approve` |
+| POST | `/api/admin/comments/:id/reject` |
 | GET | `/api/admin/dlq` |
 | GET | `/api/admin/dlq/:id` |
 | POST | `/api/admin/dlq/:id/retry` |
@@ -334,4 +388,4 @@ Current backend uses pluralized routes and the exact inventory above.
 - Prefer `/api/users/*` for user lifecycle endpoints.
 - `/api/auth/*` remains active for auth-centric operations and password-reset flow.
 - Report submission endpoint supports anonymous and authenticated modes through optional JWT.
-- Some admin/report routes are currently duplicated by two controllers; avoid assuming only one handler implementation exists.
+- All `/api/admin/reports*` routes are owned exclusively by `AdminController` (`src/admin/admin.controller.ts`). `AdminReportsController` has been removed to eliminate duplicate route registration.

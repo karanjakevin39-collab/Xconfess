@@ -5,6 +5,8 @@ import { ErrorBoundary } from "@/app/components/common/ErrorBoundary";
 import { ConfessionFeed } from "@/app/components/confession/ConfessionFeed";
 import Header from "@/app/components/layout/Header";
 import { useAuthContext } from "../lib/providers/AuthProvider";
+import { useQuery } from "@tanstack/react-query";
+import { fetchUserStats } from "@/app/api/user.api";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -21,13 +23,27 @@ function formatDate(iso: string) {
 function StatBadge({
   label,
   value,
+  loading = false,
 }: {
   label: string;
-  value: string | number;
+  value?: string | number;
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div
+        className="flex flex-col items-center rounded-xl border border-zinc-700 bg-white dark:bg-zinc-900 px-6 py-4 text-center shadow-sm animate-pulse"
+        aria-hidden="true"
+      >
+        <div className="h-8 w-12 bg-zinc-200 dark:bg-zinc-800 rounded mb-2" />
+        <div className="h-3 w-16 bg-zinc-100 dark:bg-zinc-800 rounded" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center rounded-xl border border-zinc-700 bg-white dark:bg-zinc-900 px-6 py-4 text-center shadow-sm">
-      <span className="text-2xl font-bold">{value}</span>
+      <span className="text-2xl font-bold">{value ?? "—"}</span>
       <span className="mt-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
         {label}
       </span>
@@ -39,34 +55,72 @@ function StatBadge({
 
 function UserSummarySection() {
   const { user } = useAuthContext();
+  const {
+    data: stats,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ["userStats"],
+    queryFn: fetchUserStats,
+    retry: 1,
+  });
 
   const displayName = user?.username
     ? `@${user.username}`
-    : (user?.email ?? "there");
+    : user?.email ?? "there";
 
   const joinedAt = user?.createdAt ? formatDate(user.createdAt) : null;
 
   return (
     <section className="rounded-xl border border-zinc-700 bg-white dark:bg-zinc-900 shadow-md p-6 space-y-4">
-      <div>
-        <h2 className="text-xl md:text-2xl font-bold">
-          Welcome back,{" "}
-          <span className="text-violet-500 dark:text-violet-400">
-            {displayName}
-          </span>
-        </h2>
-        {joinedAt && (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            Member since {joinedAt}
-          </p>
-        )}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold">
+            Welcome back,{" "}
+            <span className="text-violet-500 dark:text-violet-400">
+              {displayName}
+            </span>
+          </h2>
+          {joinedAt && (
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+              Member since {joinedAt}
+            </p>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <StatBadge label="Confessions" value={user?.totalConfessions ?? "—"} />
-        <StatBadge label="Likes received" value={user?.totalLikes ?? "—"} />
-        <StatBadge label="Status" value="Active" />
-      </div>
+      {isError ? (
+        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-4 text-center">
+          <p className="text-sm text-red-600 dark:text-red-400 mb-2">
+            Failed to load stats
+          </p>
+          <button
+            onClick={() => void refetch()}
+            className="text-xs font-semibold text-red-700 dark:text-red-300 hover:underline"
+          >
+            Retry
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <StatBadge
+            label="Confessions"
+            value={stats?.totalConfessions}
+            loading={isLoading}
+          />
+          <StatBadge
+            label="Likes received"
+            value={stats?.totalReactions}
+            loading={isLoading}
+          />
+          <StatBadge
+            label="Streak"
+            value={stats?.streak ? `${stats.streak}d` : "0d"}
+            loading={isLoading}
+          />
+        </div>
+      )}
 
       <Link
         href="/confess"
@@ -106,7 +160,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <Header />
-      <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 flex flex-col gap-8">
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 md:px-8 lg:px-10 flex flex-col gap-8">
         <UserSummarySection />
         <RecentConfessionsSection />
       </main>

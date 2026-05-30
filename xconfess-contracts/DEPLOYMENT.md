@@ -28,6 +28,20 @@ Before deploying contracts, ensure you have:
 3. ✅ Stellar account with testnet XLM (for testing)
 4. ✅ Stellar CLI v22.0.0 or later
 
+For Windows contributors, see [WINDOWS_SETUP.md](./WINDOWS_SETUP.md) for
+platform-specific notes on PowerShell, the WASM target, and path issues.
+
+Before a full deployment, run the automated preflight check from the repository
+root to verify all prerequisites at once:
+
+```bash
+./scripts/contracts-preflight.sh           # build-only checks
+./scripts/contracts-preflight.sh --deploy  # also checks key, network, and Stellar CLI
+```
+
+A dry-run checklist with manual verification steps is available in
+[TESTNET_DRY_RUN_CHECKLIST.md](./TESTNET_DRY_RUN_CHECKLIST.md).
+
 ### Quick Setup Check
 
 ```bash
@@ -168,12 +182,15 @@ cargo test -- --nocapture
 After deploying to a network, test contract invocations:
 
 ```bash
-# Test ConfessionAnchor
+# Test ConfessionAnchor — get_version is a read-only call available on all contracts
 stellar contract invoke \
   --id $CONFESSION_ANCHOR_ID \
   --source "$DEPLOYER_KEY" \
   --network testnet \
-  -- gDeployment Metadata
+  -- get_version
+```
+
+## Deployment Metadata
 
 Contract IDs are automatically saved in `deployments/<network>.json` by the canonical script:
 
@@ -195,14 +212,40 @@ This file includes:
 
 ```bash
 git add deployments/testnet.json
-git commit -m "deploy: contracts deployed to testnet"     "id": "CYYYYYYYYY...",
-      "wasm": "reputation_badges.wasm",
-      "version": "0.1.0"
+git commit -m "deploy: contracts deployed to testnet"
+```
+
+Example `deployments/testnet.json` structure:
+
+```json
+{
+  "generated_at_utc": "2025-01-01T00:00:00Z",
+  "network": "testnet",
+  "target": "wasm32-unknown-unknown",
+  "contracts": {
+    "confession-anchor": {
+      "contract_id": "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "sha256": "abc123...",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32-unknown-unknown/release/confession_anchor.wasm"
     },
-    "anonymous_tipping": {
-      "id": "CZZZZZZZZZZ...",
-      "wasm": "anonymous_tipping.wasm",
-      "version": "0.1.0"
+    "confession-registry": {
+      "contract_id": "CWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+      "sha256": "def456...",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32-unknown-unknown/release/confession_registry.wasm"
+    },
+    "reputation-badges": {
+      "contract_id": "CYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY",
+      "sha256": "ghi789...",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32-unknown-unknown/release/reputation_badges.wasm"
+    },
+    "anonymous-tipping": {
+      "contract_id": "CZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "sha256": "jkl012...",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32-unknown-unknown/release/anonymous_tipping.wasm"
     }
   }
 }

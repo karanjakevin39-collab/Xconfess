@@ -4,10 +4,13 @@ import { Repository, UpdateResult } from 'typeorm';
 import { DataCleanupService } from './data-export-cleanup';
 import { ExportRequest } from './entities/export-request.entity';
 import { LessThan } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 describe('DataCleanupService', () => {
   let service: DataCleanupService;
   let mockExportRepository: jest.Mocked<Repository<ExportRequest>>;
+  let mockAuditLogService: { log: jest.Mock };
 
   beforeEach(async () => {
     mockExportRepository = {
@@ -16,6 +19,15 @@ describe('DataCleanupService', () => {
       findOne: jest.fn(),
       delete: jest.fn(),
     } as any;
+    mockAuditLogService = { log: jest.fn().mockResolvedValue(undefined) };
+    mockExportRepository.find.mockResolvedValue([
+      {
+        id: 'export-1',
+        userId: 'user-1',
+        status: 'READY',
+        createdAt: new Date('2026-03-01T00:00:00.000Z'),
+      } as ExportRequest,
+    ]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -23,6 +35,14 @@ describe('DataCleanupService', () => {
         {
           provide: getRepositoryToken(ExportRequest),
           useValue: mockExportRepository,
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback) },
+        },
+        {
+          provide: AuditLogService,
+          useValue: mockAuditLogService,
         },
       ],
     }).compile();
@@ -49,8 +69,12 @@ describe('DataCleanupService', () => {
       await service.purgeOldExports();
 
       expect(mockExportRepository.update).toHaveBeenCalledWith(
-        { createdAt: expect.any(LessThan) },
-        { fileData: null, status: 'EXPIRED' },
+        expect.objectContaining({ createdAt: expect.any(Object) }),
+        expect.objectContaining({
+          fileData: null,
+          status: 'EXPIRED',
+          expiredAt: expect.any(Date),
+        }),
       );
     });
 
@@ -97,7 +121,11 @@ describe('DataCleanupService', () => {
 
       expect(mockExportRepository.update).toHaveBeenCalledWith(
         expect.any(Object),
-        { fileData: null, status: 'EXPIRED' },
+        expect.objectContaining({
+          fileData: null,
+          status: 'EXPIRED',
+          expiredAt: expect.any(Date),
+        }),
       );
       expect(mockUpdateResult.affected).toBe(12);
     });
@@ -118,7 +146,11 @@ describe('DataCleanupService', () => {
 
       expect(mockExportRepository.update).toHaveBeenCalledWith(
         expect.any(Object),
-        { fileData: null, status: 'EXPIRED' },
+        expect.objectContaining({
+          fileData: null,
+          status: 'EXPIRED',
+          expiredAt: expect.any(Date),
+        }),
       );
     });
 
@@ -134,15 +166,20 @@ describe('DataCleanupService', () => {
 
       expect(mockExportRepository.update).toHaveBeenCalledWith(
         expect.any(Object),
-        { fileData: null, status: 'EXPIRED' },
+        expect.objectContaining({
+          fileData: null,
+          status: 'EXPIRED',
+          expiredAt: expect.any(Date),
+        }),
       );
 
       const updateCall = mockExportRepository.update.mock.calls[0];
       const updateFields = updateCall[1];
 
-      expect(Object.keys(updateFields)).toHaveLength(2);
+      expect(Object.keys(updateFields)).toHaveLength(3);
       expect(updateFields.fileData).toBeNull();
       expect(updateFields.status).toBe('EXPIRED');
+      expect(updateFields.expiredAt).toBeInstanceOf(Date);
     });
 
     it('should not affect exports with terminal status that are recent', async () => {
@@ -224,7 +261,11 @@ describe('DataCleanupService', () => {
 
       expect(mockExportRepository.update).toHaveBeenCalledWith(
         expect.any(Object),
-        { fileData: null, status: 'EXPIRED' },
+        expect.objectContaining({
+          fileData: null,
+          status: 'EXPIRED',
+          expiredAt: expect.any(Date),
+        }),
       );
 
       const updateCall = mockExportRepository.update.mock.calls[0];
@@ -299,8 +340,12 @@ describe('DataCleanupService', () => {
         await service.purgeOldExports();
 
         expect(mockExportRepository.update).toHaveBeenCalledWith(
-          { createdAt: expect.any(LessThan) },
-          { fileData: null, status: 'EXPIRED' },
+          expect.objectContaining({ createdAt: expect.any(Object) }),
+          expect.objectContaining({
+            fileData: null,
+            status: 'EXPIRED',
+            expiredAt: expect.any(Date),
+          }),
         );
       } finally {
         jest.useRealTimers();

@@ -1,5 +1,5 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { ReportStatus } from '../report.entity';
+import { ReportStatus } from '../../admin/entities/report.entity';
 
 export class UpdateReportStatusDto {
   @IsEnum([ReportStatus.RESOLVED, ReportStatus.DISMISSED], {

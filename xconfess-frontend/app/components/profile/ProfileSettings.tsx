@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { UserProfile } from "../../api/user.api";
 import Link from "next/link";
 import { Shield, Bell, ChevronRight } from "lucide-react";
+import { useGlobalToast } from "@/app/components/common/Toast";
 
 interface Props {
   profile: UserProfile;
@@ -10,10 +11,11 @@ interface Props {
 
 const ProfileSettings = ({ profile, saveProfile }: Props) => {
   const [isAnonymous, setIsAnonymous] = useState(profile.isAnonymous);
+  const toast = useGlobalToast();
 
   const handleSave = async () => {
     await saveProfile({ isAnonymous });
-    alert("Profile updated!");
+    toast.success("Profile updated!");
   };
 
   return (

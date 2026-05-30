@@ -1,3 +1,5 @@
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -5,10 +7,7 @@ export async function GET(request: Request) {
 
     // Validate period
     if (!['7days', '30days'].includes(period)) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid period. Use 7days or 30days' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return createApiErrorResponse('Invalid period. Use 7days or 30days', { status: 400 });
     }
 
     const days = period === '7days' ? 7 : 30;
@@ -89,16 +88,16 @@ export async function GET(request: Request) {
 
     return new Response(JSON.stringify(analytics), {
       status: 200,
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'public, max-age=900' // 15 minutes cache
       }
     });
   } catch (error) {
-    console.error('Error fetching analytics:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to fetch analytics' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      fallbackMessage: "Failed to fetch analytics",
+      route: "GET /api/trending"
+    });
   }
 }

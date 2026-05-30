@@ -1,26 +1,121 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #000000;
-  --secondary: #1e293b;
-  --primary: #9333ea;
+  --background: #f3efe8;
+  --surface: rgba(255, 252, 247, 0.84);
+  --surface-strong: #fffdf9;
+  --surface-muted: rgba(249, 245, 238, 0.88);
+  --foreground: #1c2430;
+  --secondary: #65707c;
+  --primary: #7b8ea3;
+  --primary-deep: #58697d;
+  --accent-soft: rgba(123, 142, 163, 0.12);
+  --accent-border: rgba(123, 142, 163, 0.24);
+  --border: rgba(74, 86, 101, 0.17);
+  --skeleton: #ddd8d0;
+  --shadow: 0 28px 90px -52px rgba(28, 36, 48, 0.22);
+  --font-sans:
+    "Aptos", "Avenir Next", "Segoe UI Variable Text", "Inter", sans-serif;
+  --font-display:
+    "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Georgia", serif;
 }
 
 .dark {
-  --background: #0f172a;
-  --foreground: #f8fafc;
-  --secondary: #94a3b8;
-  --primary: #a855f7;
+  --background: #121821;
+  --surface: rgba(24, 31, 40, 0.86);
+  --surface-strong: #1b2330;
+  --surface-muted: rgba(29, 38, 49, 0.92);
+  --foreground: #edf2f7;
+  --secondary: #a5b1bf;
+  --primary: #95a8bc;
+  --primary-deep: #71859c;
+  --accent-soft: rgba(149, 168, 188, 0.14);
+  --accent-border: rgba(149, 168, 188, 0.24);
+  --border: rgba(165, 177, 191, 0.13);
+  --skeleton: #33404f;
+  --shadow: 0 32px 100px -55px rgba(0, 0, 0, 0.62);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-image:
+    radial-gradient(circle at top, var(--accent-soft), transparent 24%),
+    radial-gradient(circle at 15% 15%, rgba(255, 255, 255, 0.7), transparent 20%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 28%),
+    linear-gradient(135deg, rgba(101, 112, 124, 0.03) 25%, transparent 25%),
+    linear-gradient(225deg, rgba(101, 112, 124, 0.03) 25%, transparent 25%);
+  background-size: auto, auto, auto, 26px 26px, 26px 26px;
+  background-position: center top, left top, center top, 0 0, 13px 13px;
+  font-family: var(--font-sans);
   transition: background-color 0.3s ease, color 0.3s ease;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.font-editorial {
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+p,
+label,
+button,
+input,
+textarea {
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: rgba(123, 142, 163, 0.24);
+}
+
+.editorial-shell {
+  position: relative;
+}
+
+.editorial-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 18%),
+    radial-gradient(circle at top right, var(--accent-soft), transparent 22%);
+  mask-image: linear-gradient(180deg, black 0%, transparent 100%);
+}
+
+.luxury-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.eyebrow {
+  color: var(--secondary);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
 }
 
 @keyframes reaction-bounce {

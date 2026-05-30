@@ -1,3 +1,4 @@
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
 import { getApiBaseUrl } from "@/app/lib/config";
 
 const BASE_API_URL = getApiBaseUrl();
@@ -14,10 +15,7 @@ export async function POST(
   try {
     const { confessionId } = await context.params;
     if (!confessionId) {
-      return new Response(
-        JSON.stringify({ message: "Confession ID is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
+      return createApiErrorResponse("Confession ID is required", { status: 400 });
     }
 
     body = await request.json().catch(() => ({}));
@@ -32,10 +30,7 @@ export async function POST(
       typeof content !== "string" ||
       content.trim().length === 0
     ) {
-      return new Response(
-        JSON.stringify({ message: "Comment content is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
+      return createApiErrorResponse("Comment content is required", { status: 400 });
     }
 
     const authHeader = request.headers.get("Authorization");
@@ -84,22 +79,12 @@ export async function POST(
         });
       }
 
-      const err = await response.json().catch(() => ({}));
-      if (response.status === 401) {
-        return new Response(
-          JSON.stringify({ message: "Please sign in to comment" }),
-          { status: 401, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify({
-          message: err.message || "Failed to post comment",
-        }),
-        {
-          status: response.status,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      const err = await response.json().catch(() => ({} as { message?: string }));
+      return createApiErrorResponse(err, {
+        status: response.status,
+        fallbackMessage: "Failed to post comment",
+        route: "POST /api/comments/[confessionId]"
+      });
     }
 
     const data = await response.json();
@@ -124,7 +109,7 @@ export async function POST(
     if (isDemoMode) {
       console.warn("Backend unreachable, returning demo comment for testing");
 
-      const { confessionId } = await context.params;
+      const { confessionId } = await context.params.catch(() => ({ confessionId: "unknown" }));
       // Use the body that was already read at the top
       const finalParentId = parentId != null ? Number(parentId) : null;
 
@@ -147,10 +132,10 @@ export async function POST(
       });
     }
 
-    console.error("Error posting comment:", error);
-    return new Response(JSON.stringify({ message: "Internal server error" }), {
+    return createApiErrorResponse(error, {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      route: "POST /api/comments/[confessionId]"
     });
   }
 }
+

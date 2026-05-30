@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import * as WalletService from "../services/wallet.service";
 import { computeWalletReadiness } from "../wallet/walletReadiness";
 
@@ -78,49 +78,6 @@ export const useWallet = (): UseWalletReturn => {
   }, []);
 
   /**
-   * Initialize wallet on mount
-   */
-  useEffect(() => {
-    if (!hasInitialized.current) {
-      hasInitialized.current = true;
-      initializeWallet();
-    }
-  }, [initializeWallet]);
-
-  /**
-   * Revalidate wallet connection on route changes
-   */
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  useEffect(() => {
-    if (hasInitialized.current && state.publicKey) {
-      const revalidateConnection = async () => {
-        const walletInfo = await WalletService.getWalletInfo();
-        if (!walletInfo) {
-          setState((prev) => ({
-            ...prev,
-            publicKey: null,
-            isConnected: false,
-            error: "Wallet disconnected. Please reconnect.",
-          }));
-          clearSession();
-        } else if (walletInfo.publicKey !== state.publicKey) {
-          setState((prev) => ({
-            ...prev,
-            publicKey: walletInfo.publicKey,
-            network: walletInfo.network,
-            isConnected: true,
-            error: null,
-          }));
-          storeSession(walletInfo.publicKey, walletInfo.network);
-        }
-      };
-      revalidateConnection();
-    }
-  }, [pathname, searchParams, state.publicKey, clearSession, storeSession]);
-
-  /**
    * Initialize wallet state from storage and current wallet connection
    */
   const initializeWallet = useCallback(async () => {
@@ -185,6 +142,48 @@ export const useWallet = (): UseWalletReturn => {
       }));
     }
   }, [storeSession, getStoredSession]);
+
+  /**
+   * Initialize wallet on mount
+   */
+  useEffect(() => {
+    if (!hasInitialized.current) {
+      hasInitialized.current = true;
+      initializeWallet();
+    }
+  }, [initializeWallet]);
+
+  /**
+   * Revalidate wallet connection on route changes
+   */
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (hasInitialized.current && state.publicKey) {
+      const revalidateConnection = async () => {
+        const walletInfo = await WalletService.getWalletInfo();
+        if (!walletInfo) {
+          setState((prev) => ({
+            ...prev,
+            publicKey: null,
+            isConnected: false,
+            error: "Wallet disconnected. Please reconnect.",
+          }));
+          clearSession();
+        } else if (walletInfo.publicKey !== state.publicKey) {
+          setState((prev) => ({
+            ...prev,
+            publicKey: walletInfo.publicKey,
+            network: walletInfo.network,
+            isConnected: true,
+            error: null,
+          }));
+          storeSession(walletInfo.publicKey, walletInfo.network);
+        }
+      };
+      revalidateConnection();
+    }
+  }, [pathname, state.publicKey, clearSession, storeSession]);
 
   /**
    * Connect to wallet

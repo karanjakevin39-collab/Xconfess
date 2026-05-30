@@ -12,3 +12,15 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[[test]]
+name = "benchmarks"
+path = "tests/benchmarks.rs"
+
+[[test]]
+name = "invariants"
+path = "tests/invariants.rs"
+
+[[test]]
+name = "migration"
+path = "tests/migration.rs"

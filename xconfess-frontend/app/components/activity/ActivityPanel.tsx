@@ -1,7 +1,9 @@
 "use client";
 
+import { ExternalLink } from "lucide-react";
 import { useActivityStore } from "@/app/lib/store/activity.store";
-import type { ChainActivity } from "@/app/lib/types/activity"; // correct type
+import type { ChainActivity } from "@/app/lib/types/activity";
+import { getStellarExplorerUrl } from "@/app/lib/utils/stellar";
 
 export default function ActivityPanel() {
   const activities: ChainActivity[] = useActivityStore((s) => s.activities);
@@ -26,23 +28,41 @@ export default function ActivityPanel() {
       )}
 
       <div className="space-y-3">
-        {activities.map((a) => (
-          <div
-            key={a.id}
-            className="border p-3 rounded-lg flex justify-between"
-          >
-            <div>
-              <p className="font-medium">{a.type.toUpperCase()}</p>
-              <p className="text-sm text-gray-500">
-                Confession: {a.confessionId ?? "N/A"}
-              </p>
-            </div>
+        {activities.map((a) => {
+          const explorerUrl =
+            a.status === "confirmed" && a.txHash
+              ? getStellarExplorerUrl(a.txHash)
+              : null;
 
-            <span className={`text-sm ${getStatusClass(a.status)}`}>
-              {a.status}
-            </span>
-          </div>
-        ))}
+          return (
+            <div
+              key={a.id}
+              className="border p-3 rounded-lg flex justify-between"
+            >
+              <div>
+                <p className="font-medium">{a.type.toUpperCase()}</p>
+                <p className="text-sm text-gray-500">
+                  Confession: {a.confessionId ?? "N/A"}
+                </p>
+                {explorerUrl && (
+                  <a
+                    href={explorerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 mt-1 text-xs text-blue-600 hover:text-blue-800"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View on Explorer
+                  </a>
+                )}
+              </div>
+
+              <span className={`text-sm ${getStatusClass(a.status)}`}>
+                {a.status}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

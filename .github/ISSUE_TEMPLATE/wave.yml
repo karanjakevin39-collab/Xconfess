@@ -1,0 +1,80 @@
+name: Wave (candidate issue)
+description: File a Stellar Wave–ready issue with clear scope and validation. Maintainers triage per the Wave guide before adding the `Stellar Wave` label.
+title: "[wave] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before publishing to contributors:** a maintainer must triage this using [maintainer/WAVE_TRIAGE.md](https://github.com/Xconfess/Xconfess/blob/main/maintainer/WAVE_TRIAGE.md) (scope, labels, ready-for-contributors checklist). This template is for **consistent intake**, not a substitute for triage.
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Wave complexity (estimate)
+      description: Rough size for reviewers and the queue — not a promise until triaged.
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or gap
+      description: One short paragraph — what is wrong or missing? No implementation prescription here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: |
+        **In scope** — bullet list of what this PR should do.
+
+        **Out of scope** — at least one bullet of what not to change (avoids scope creep; see triage guide).
+      placeholder: |
+        In scope:
+        - …
+
+        Out of scope:
+        - …
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Likely files / areas (optional)
+      description: Directories or modules you expect to touch — orient reviewers; not a mandate.
+      placeholder: |
+        - `xconfess-backend/src/...`
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Testable statements a reviewer can verify locally (no production-only checks). Prefer observable behavior over “add X to Y”.
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: How to validate
+      description: Exact local steps — e.g. relevant `npm` / `cargo` / `compose.yaml` commands. Link runbook sections if needed.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      description: Confirm the issue text is safe to share externally.
+      options:
+        - label: No production credentials, internal hostnames, or sensitive user data in this issue.
+          required: true

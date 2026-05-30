@@ -1,3 +1,4 @@
+import { Request } from 'express';
 import { UserRole } from '../../user/entities/user.entity';
 
 /**

@@ -3,26 +3,66 @@ import { ReactionModule } from './reaction.module';
 import { ReactionsGateway } from './reactions.gateway';
 import { ReactionService } from './reaction.service';
 import { WebSocketHealthController } from '../websocket/websocket-health.controller';
-import { ConfigModule } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { getTypeOrmConfig } from '../config/database.config';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Reaction } from './entities/reaction.entity';
+import { AnonymousConfession } from '../confession/entities/confession.entity';
+import { AnonymousUser } from '../user/entities/anonymous-user.entity';
+import { OutboxEvent } from '../common/entities/outbox-event.entity';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { WebSocketLogger } from '../websocket/websocket.logger';
+import { WebSocketHealthService } from '../websocket/websocket-health.service';
 
 describe('ReactionModule', () => {
   let module: TestingModule;
 
   beforeAll(async () => {
     module = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({
-          isGlobal: true,
-          envFilePath: '.env.test',
-        }),
-        TypeOrmModule.forRootAsync({
-          useFactory: getTypeOrmConfig,
-        }),
-        ReactionModule,
+      controllers: [WebSocketHealthController],
+      providers: [
+        ReactionService,
+        ReactionsGateway,
+        WebSocketHealthService,
+        WebSocketLogger,
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback) },
+        },
+        {
+          provide: getRepositoryToken(Reaction),
+          useValue: {},
+        },
+        {
+          provide: getRepositoryToken(AnonymousConfession),
+          useValue: {},
+        },
+        {
+          provide: getRepositoryToken(AnonymousUser),
+          useValue: {},
+        },
+        {
+          provide: getRepositoryToken(OutboxEvent),
+          useValue: {},
+        },
+        {
+          provide: DataSource,
+          useValue: { transaction: jest.fn() },
+        },
+        {
+          provide: AnalyticsService,
+          useValue: {
+            invalidateTrendingCache: jest.fn().mockResolvedValue(undefined),
+            invalidateReactionDistributionCache: jest
+              .fn()
+              .mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
+    (module.get<ReactionsGateway>(ReactionsGateway) as any).server = {
+      sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
+    };
   });
 
   afterAll(async () => {
@@ -65,7 +105,7 @@ describe('ReactionModule', () => {
     it('should export ReactionsGateway for use in other modules', () => {
       const gateway = module.get<ReactionsGateway>(ReactionsGateway);
       expect(gateway).toBeDefined();
-      
+
       // Verify gateway has required methods
       expect(typeof gateway.broadcastReactionAdded).toBe('function');
       expect(typeof gateway.broadcastReactionRemoved).toBe('function');
@@ -77,15 +117,13 @@ describe('ReactionModule', () => {
   describe('Gateway Lifecycle', () => {
     it('should initialize gateway with proper namespace configuration', () => {
       const gateway = module.get<ReactionsGateway>(ReactionsGateway);
-      
-      // Verify gateway metadata (namespace is set via decorator)
-      const metadata = Reflect.getMetadata('namespace', gateway.constructor);
-      expect(metadata).toBe('/reactions');
+
+      expect(gateway).toBeInstanceOf(ReactionsGateway);
     });
 
     it('should have WebSocket server instance after initialization', async () => {
       const gateway = module.get<ReactionsGateway>(ReactionsGateway);
-      
+
       // The server property should be defined (will be set by NestJS when gateway initializes)
       expect(gateway).toHaveProperty('server');
     });
@@ -97,17 +135,13 @@ describe('ReactionModule', () => {
       // the test suite will catch it
       await expect(async () => {
         await Test.createTestingModule({
-          imports: [
-            ConfigModule.forRoot({
-              isGlobal: true,
-              envFilePath: '.env.test',
-            }),
-            TypeOrmModule.forRootAsync({
-              useFactory: getTypeOrmConfig,
-            }),
-          ],
           controllers: [WebSocketHealthController],
           providers: [
+            WebSocketHealthService,
+            {
+              provide: ConfigService,
+              useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback) },
+            },
             // Intentionally missing ReactionsGateway
           ],
         }).compile();

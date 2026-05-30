@@ -7,6 +7,7 @@ import { User } from '../user/entities/user.entity';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
 import { mailConfig, circuitBreakerConfig } from '../config/email.config';
 import { AuditLogModule } from '../audit-log/audit-log.module';
+import { MailConfigValidator } from './mail-config-validator';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module';
     AuditLogModule,
   ],
   controllers: [EmailController],
-  providers: [EmailService],
-  exports: [EmailService],
+  providers: [EmailService, MailConfigValidator],
+  exports: [EmailService, MailConfigValidator],
 })
 export class EmailModule {}

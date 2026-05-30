@@ -1,12 +1,12 @@
 #![cfg(test)]
 
 use confession_anchor::{ConfessionAnchor, ConfessionAnchorClient};
-use soroban_sdk::{testutils::Events, BytesN, Env, Symbol};
+use soroban_sdk::{BytesN, Env, Symbol};
 
 fn new_client() -> (Env, ConfessionAnchorClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, ConfessionAnchor);
+    let contract_id = env.register(ConfessionAnchor, ());
     let client = ConfessionAnchorClient::new(&env, &contract_id);
     (env, client)
 }

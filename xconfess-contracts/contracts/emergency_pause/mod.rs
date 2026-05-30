@@ -1,8 +1,10 @@
-pub mod storage;
+pub mod admin;
 pub mod errors;
 pub mod events;
-pub mod admin;
 pub mod pause;
+pub mod storage;
 
-pub use pause::{pause, unpause, assert_not_paused, is_paused, set_paused_internal};
-pub use admin::{set_admin, get_admin};
+#[allow(unused_imports)]
+pub use admin::{get_admin, set_admin};
+#[allow(unused_imports)]
+pub use pause::{assert_not_paused, is_paused, pause, set_paused_internal, unpause};

@@ -13,9 +13,10 @@ import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { AnonymousUserService } from '../user/anonymous-user.service';
 import { CryptoUtil } from '../common/crypto.util';
+import { ConfigService } from '@nestjs/config';
 
 // Mock bcrypt module
-jest.mock('bcrypt', () => ({
+jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
   compare: jest.fn(),
 }));
@@ -45,6 +46,10 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
     updatedAt: new Date(),
     isAdmin: false,
     is_active: true,
+    isDiscoverable: jest.fn().mockReturnValue(true),
+    canReceiveReplies: jest.fn().mockReturnValue(true),
+    shouldShowReactions: jest.fn().mockReturnValue(true),
+    hasDataProcessingConsent: jest.fn().mockReturnValue(true),
   };
 
   beforeEach(async () => {
@@ -56,6 +61,10 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
         PasswordResetService,
         EmailService,
         JwtService,
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback ?? '') },
+        },
         {
           provide: AnonymousUserService,
           useValue: {
@@ -194,17 +203,25 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       });
 
       // Verify that the password was updated
-      expect(userRepository.update).toHaveBeenCalledWith(1, {
-        password: 'hashedPassword',
-        resetPasswordToken: null,
-        resetPasswordExpires: null,
-      });
+      expect(userRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          password: 'hashedPassword',
+          resetPasswordToken: null,
+          resetPasswordExpires: null,
+        }),
+      );
 
       // Verify that the token was marked as used
-      expect(passwordResetRepository.update).toHaveBeenCalledWith(1, {
-        used: true,
-        usedAt: expect.any(Date),
-      });
+      expect(passwordResetRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token: actualToken,
+          used: false,
+        }),
+        {
+          used: true,
+          usedAt: expect.any(Date),
+        },
+      );
     });
 
     it('should handle invalid token during reset', async () => {
@@ -295,6 +312,10 @@ describe('AuthService Integration', () => {
     updatedAt: new Date(),
     isAdmin: false,
     is_active: true,
+    isDiscoverable: jest.fn().mockReturnValue(true),
+    canReceiveReplies: jest.fn().mockReturnValue(true),
+    shouldShowReactions: jest.fn().mockReturnValue(true),
+    hasDataProcessingConsent: jest.fn().mockReturnValue(true),
   };
 
   beforeEach(async () => {
@@ -315,6 +336,10 @@ describe('AuthService Integration', () => {
           useValue: {
             sign: jest.fn().mockReturnValue('mock-jwt-token'),
           },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback ?? '') },
         },
         {
           provide: EmailService,
@@ -357,14 +382,19 @@ describe('AuthService Integration', () => {
       const result = await service.login('test@example.com', 'password123');
 
       expect(result).toHaveProperty('access_token');
-      expect(result.user).toEqual({
+      expect(result.user).toMatchObject({
         id: mockUser.id,
         username: mockUser.username,
         email: 'test@example.com',
-        resetPasswordToken: mockUser.resetPasswordToken,
-        resetPasswordExpires: mockUser.resetPasswordExpires,
         createdAt: mockUser.createdAt,
         updatedAt: mockUser.updatedAt,
+        is_active: true,
+        privacy: {
+          isDiscoverable: true,
+          canReceiveReplies: true,
+          showReactions: true,
+          dataProcessingConsent: true,
+        },
       });
     });
 
@@ -374,7 +404,7 @@ describe('AuthService Integration', () => {
 
       await expect(
         service.login('test@example.com', 'wrongpassword'),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow('Invalid credentials');
     });
   });
 
@@ -397,6 +427,8 @@ describe('AuthService Integration', () => {
       });
       expect(passwordResetService.createResetToken).toHaveBeenCalledWith(
         mockUser.id,
+        undefined,
+        undefined,
       );
       expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
         'test@example.com',

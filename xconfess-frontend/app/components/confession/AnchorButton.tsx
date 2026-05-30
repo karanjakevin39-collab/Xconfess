@@ -1,17 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useStellarWallet } from "@/app/lib/hooks/useStellarWallet";
+import { useState, type FC } from "react";
+import { Anchor, CheckCircle2, ExternalLink, Loader2, AlertCircle, Wallet } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/app/components/ui/button";
-import {
-  Loader2,
-  CheckCircle2,
-  ExternalLink,
-  Anchor,
-} from "lucide-react";
 import { cn } from "@/app/lib/utils/cn";
 import { useActivityStore } from "@/app/lib/store/activity.store";
-import { v4 as uuidv4 } from "uuid";
+import { useStellarWallet } from "@/lib/hooks/useStellarWallet";
+import { getWalletCTAState } from "@/lib/hooks/useWalletCTAState";
+import { getStellarExplorerUrl } from "@/app/lib/utils/stellar";
 
 interface AnchorButtonProps {
   confessionId: string;
@@ -22,7 +19,7 @@ interface AnchorButtonProps {
   className?: string;
 }
 
-export const AnchorButton: React.FC<AnchorButtonProps> = ({
+export const AnchorButton: FC<AnchorButtonProps> = ({
   confessionId,
   confessionContent,
   isAnchored = false,
@@ -39,6 +36,13 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
     anchor,
     isLoading,
   } = useStellarWallet();
+  const walletCTA = getWalletCTAState({
+    isFreighterInstalled: isAvailable,
+    isConnected,
+    isReady,
+    readinessError,
+    isLoading,
+  });
 
   const addActivity = useActivityStore((s) => s.addActivity);
   const updateActivity = useActivityStore((s) => s.updateActivity);
@@ -48,30 +52,21 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [anchored, setAnchored] = useState(isAnchored);
 
-  const getExplorerUrl = (hash: string) => {
-    const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet";
-    const baseUrl =
-      network === "mainnet"
-        ? "https://stellar.expert/explorer/public/tx"
-        : "https://stellar.expert/explorer/testnet/tx";
-    return `${baseUrl}/${hash}`;
-  };
-
   const handleAnchor = async () => {
+    if (isAnchoring || isLoading) return;
     setError(null);
 
     if (!isConnected) {
       try {
         await connect();
       } catch {
-        setError("Failed to connect wallet");
+        setError("Failed to connect wallet. Please ensure Freighter is unlocked.");
         return;
       }
     }
 
     setIsAnchoring(true);
 
-    // ✅ Create activity FIRST
     const activityId = uuidv4();
     addActivity({
       id: activityId,
@@ -85,30 +80,24 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
       const result = await anchor(confessionContent);
 
       if (result.success && result.txHash) {
-        // update activity with txHash
         updateActivity(activityId, {
           txHash: result.txHash,
         });
 
-        // save to backend
-        const response = await fetch(
-          `/api/confessions/${confessionId}/anchor`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              stellarTxHash: result.txHash,
-            }),
-          }
-        );
+        const response = await fetch(`/api/confessions/${confessionId}/anchor`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            stellarTxHash: result.txHash,
+          }),
+        });
 
         if (!response.ok) {
           throw new Error("Failed to save anchor");
         }
 
-        // mark as confirmed
         updateActivity(activityId, {
           status: "confirmed",
           updatedAt: Date.now(),
@@ -139,17 +128,16 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
     }
   };
 
-  // ✅ Already anchored UI
   if (anchored && txHash) {
     return (
       <div className={cn("flex items-center gap-2", className)}>
         <CheckCircle2 className="h-4 w-4 text-green-400" />
         <span className="text-xs text-zinc-400">Anchored</span>
         <a
-          href={getExplorerUrl(txHash)}
+          href={getStellarExplorerUrl(txHash) ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+          className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
         >
           <ExternalLink className="h-3 w-3" />
         </a>
@@ -157,11 +145,13 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
     );
   }
 
-  // ❌ Wallet not available
-  if (!isAvailable) {
+  if (walletCTA.status === "not-installed") {
     return (
-      <div className={cn("text-xs text-zinc-500", className)}>
-        Wallet required
+      <div className={cn("flex flex-col gap-1.5", className)}>
+        <div className="flex items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-1.5">
+          <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 text-yellow-500" />
+          <span className="text-xs text-yellow-400">{walletCTA.guidance}</span>
+        </div>
       </div>
     );
   }
@@ -171,31 +161,40 @@ export const AnchorButton: React.FC<AnchorButtonProps> = ({
       <Button
         variant="outline"
         size="sm"
-        onClick={handleAnchor}
-        disabled={isAnchoring || isLoading || (isConnected && !isReady)}
-        className="h-7 px-2 text-xs"
+        onClick={walletCTA.status === "not-connected" ? handleAnchor : handleAnchor}
+        disabled={isAnchoring || walletCTA.disabled}
+        className={cn(
+          "h-7 px-2 text-xs",
+          walletCTA.status === "not-connected" &&
+            "border-blue-500/40 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300",
+        )}
       >
-        {isAnchoring || isLoading ? (
+        {isAnchoring || (isLoading && isConnected) ? (
           <>
-            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
             Anchoring...
+          </>
+        ) : walletCTA.status === "not-connected" ? (
+          <>
+            <Wallet className="mr-1 h-3 w-3" />
+            Connect Wallet to Anchor
           </>
         ) : (
           <>
-            <Anchor className="h-3 w-3 mr-1" />
+            <Anchor className="mr-1 h-3 w-3" />
             Anchor
           </>
         )}
       </Button>
 
-      {error && (
-        <div className="text-xs text-red-400">{error}</div>
+      {walletCTA.status === "not-connected" && walletCTA.guidance && (
+        <p className="text-xs text-zinc-500">{walletCTA.guidance}</p>
       )}
 
-      {isConnected && !isReady && !error && (
-        <div className="text-xs text-orange-400">
-          {readinessError}
-        </div>
+      {error && <div className="text-xs text-red-400">{error}</div>}
+
+      {walletCTA.status === "not-ready" && !error && (
+        <div className="text-xs text-orange-400">{walletCTA.guidance}</div>
       )}
     </div>
   );

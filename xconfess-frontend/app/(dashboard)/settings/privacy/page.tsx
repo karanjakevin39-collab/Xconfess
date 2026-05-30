@@ -1,93 +1,106 @@
-"use client"
+"use client";
 
-// xconfess-frontend/app/(dashboard)/settings/privacy/page.tsx
-
-import React, { useState, useEffect } from 'react'
-import { Shield, Eye, MessageSquare, Database, Save } from 'lucide-react'
-import { useGlobalToast } from '@/app/components/common/Toast'
+import React, { useEffect, useState } from 'react';
+import { Shield, Eye, MessageSquare, Database, Save } from 'lucide-react';
+import { useGlobalToast } from '@/app/components/common/Toast';
 
 interface PrivacySettings {
-  isDiscoverable: boolean
-  canReceiveReplies: boolean
-  showReactions: boolean
-  dataProcessingConsent: boolean
+  isDiscoverable: boolean;
+  canReceiveReplies: boolean;
+  showReactions: boolean;
+  dataProcessingConsent: boolean;
 }
 
 export default function PrivacySettingsPage() {
-  const [settings, setSettings] = useState<PrivacySettings | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const { addToast } = useGlobalToast()
-
+  const [settings, setSettings] = useState<PrivacySettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const toast = useGlobalToast();
 
   const loadSettings = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+
     try {
       const response = await fetch('/api/users/privacy-settings', {
-        headers: { 
-          'Authorization': `Bearer ${localStorage.getItem('token')}` 
-        }
-      })
-      
-      if (!response.ok) throw new Error('Failed to load settings')
-      
-      setSettings(data)
-    } catch {
-      addToast('Failed to load privacy settings', 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [addToast])
+        credentials: 'include',
+      });
 
-  // Load settings from backend
+      if (!response.ok) {
+        throw new Error('Failed to load settings');
+      }
+
+      const data: PrivacySettings = await response.json();
+      setSettings(data);
+    } catch {
+      setLoadError('Failed to load privacy settings.');
+      toast.error('Failed to load privacy settings');
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    loadSettings()
-  }, [loadSettings])
+    void loadSettings();
+  }, [loadSettings]);
 
   const handleSave = async () => {
-    if (!settings) return
-    
+    if (!settings) return;
+
     try {
-      setSaving(true)
+      setSaving(true);
       const response = await fetch('/api/users/privacy-settings', {
         method: 'PATCH',
-        headers: { 
+        credentials: 'include',
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        body: JSON.stringify(settings)
-      })
-      
-      if (!response.ok) throw new Error('Failed to save settings')
-      
-      const updated = await response.json()
-      setSettings(updated)
-      addToast('Privacy settings saved successfully', 'success')
+        body: JSON.stringify(settings),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save settings');
+      }
+
+      const updated: PrivacySettings = await response.json();
+      setSettings(updated);
+      toast.success('Privacy settings saved successfully');
     } catch {
-      addToast('Failed to save privacy settings', 'error')
+      toast.error('Failed to save privacy settings');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
-    )
+    );
   }
 
   if (!settings) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-gray-400">Failed to load settings</p>
+        <div className="space-y-3 text-center">
+          <p className="text-gray-400">{loadError ?? 'Failed to load settings'}</p>
+          <button
+            onClick={() => {
+              void loadSettings();
+            }}
+            className="rounded-md border border-gray-700 px-4 py-2 text-sm text-white transition hover:bg-gray-800"
+          >
+            Retry
+          </button>
+        </div>
       </div>
-    )
+    );
   }
 
   return (
     <div className="max-w-3xl mx-auto p-6">
-      {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white flex items-center gap-2">
           <Shield className="h-6 w-6" />
@@ -98,7 +111,6 @@ export default function PrivacySettingsPage() {
         </p>
       </div>
 
-      {/* Discoverability Section */}
       <div className="bg-gray-800 rounded-lg mb-4">
         <div className="p-4 border-b border-gray-700">
           <h2 className="font-semibold text-white flex items-center gap-2">
@@ -118,14 +130,15 @@ export default function PrivacySettingsPage() {
             <input
               type="checkbox"
               checked={settings.isDiscoverable}
-              onChange={(e) => setSettings({ ...settings, isDiscoverable: e.target.checked })}
+              onChange={(e) =>
+                setSettings({ ...settings, isDiscoverable: e.target.checked })
+              }
               className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
             />
           </label>
         </div>
       </div>
 
-      {/* Interaction Controls Section */}
       <div className="bg-gray-800 rounded-lg mb-4">
         <div className="p-4 border-b border-gray-700">
           <h2 className="font-semibold text-white flex items-center gap-2">
@@ -145,7 +158,9 @@ export default function PrivacySettingsPage() {
             <input
               type="checkbox"
               checked={settings.canReceiveReplies}
-              onChange={(e) => setSettings({ ...settings, canReceiveReplies: e.target.checked })}
+              onChange={(e) =>
+                setSettings({ ...settings, canReceiveReplies: e.target.checked })
+              }
               className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
             />
           </label>
@@ -159,14 +174,15 @@ export default function PrivacySettingsPage() {
             <input
               type="checkbox"
               checked={settings.showReactions}
-              onChange={(e) => setSettings({ ...settings, showReactions: e.target.checked })}
+              onChange={(e) =>
+                setSettings({ ...settings, showReactions: e.target.checked })
+              }
               className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
             />
           </label>
         </div>
       </div>
 
-      {/* Data Handling Section */}
       <div className="bg-gray-800 rounded-lg mb-6">
         <div className="p-4 border-b border-gray-700">
           <h2 className="font-semibold text-white flex items-center gap-2">
@@ -186,14 +202,18 @@ export default function PrivacySettingsPage() {
             <input
               type="checkbox"
               checked={settings.dataProcessingConsent}
-              onChange={(e) => setSettings({ ...settings, dataProcessingConsent: e.target.checked })}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  dataProcessingConsent: e.target.checked,
+                })
+              }
               className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
             />
           </label>
         </div>
       </div>
 
-      {/* Save Button */}
       <button
         onClick={handleSave}
         disabled={saving}
@@ -203,5 +223,5 @@ export default function PrivacySettingsPage() {
         {saving ? 'Saving...' : 'Save Settings'}
       </button>
     </div>
-  )
+  );
 }

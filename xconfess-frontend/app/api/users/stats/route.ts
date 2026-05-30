@@ -1,22 +1,14 @@
-const BASE_API_URL = process.env.BACKEND_API_URL;
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
+import { getApiBaseUrl } from "@/app/lib/config";
+
+const BASE_API_URL = getApiBaseUrl();
 
 export async function GET(request: Request) {
-  if (!BASE_API_URL) {
-    return new Response(
-      JSON.stringify({
-        message: "Server misconfiguration: BACKEND_API_URL is not set.",
-      }),
-      {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
+  const correlationId = request.headers.get("X-Correlation-ID") || "unknown";
 
   try {
     const backendUrl = `${BASE_API_URL}/users/stats`;
 
-    const correlationId = request.headers.get("X-Correlation-ID") || "unknown";
     const cookie = request.headers.get("cookie") || "";
 
     const response = await fetch(backendUrl, {
@@ -27,24 +19,29 @@ export async function GET(request: Request) {
       },
     });
 
-    const responseBody = await response.text();
-    const status = response.status;
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: response.status,
+        correlationId,
+        route: "GET /api/users/stats"
+      });
+    }
 
+    const responseBody = await response.text();
     return new Response(responseBody, {
-      status,
+      status: 200,
       headers: {
         "Content-Type": "application/json",
         "Set-Cookie": response.headers.get("set-cookie") || "",
       },
     });
   } catch (error) {
-    console.error("Error proxying to backend:", error);
-    return new Response(
-      JSON.stringify({ message: "Internal server error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      correlationId,
+      route: "GET /api/users/stats"
+    });
   }
 }
+

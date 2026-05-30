@@ -1,26 +1,24 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { Queue, Worker, Job } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { ConfessionDraftService } from './confession-draft.service';
 
 @Injectable()
 export class ConfessionDraftQueue implements OnModuleDestroy {
-  private readonly queue: Queue;
   private readonly worker: Worker;
   private readonly logger = new Logger(ConfessionDraftQueue.name);
 
   constructor(
     private readonly configService: ConfigService,
     private readonly draftService: ConfessionDraftService,
+    @InjectQueue('confession-draft-publisher')
+    private readonly queue: Queue,
   ) {
     const redisConfig = {
       host: this.configService.get('REDIS_HOST', 'localhost'),
       port: this.configService.get('REDIS_PORT', 6379),
     };
-
-    this.queue = new Queue('confession-draft-publisher', {
-      connection: redisConfig,
-    });
 
     this.worker = new Worker(
       'confession-draft-publisher',

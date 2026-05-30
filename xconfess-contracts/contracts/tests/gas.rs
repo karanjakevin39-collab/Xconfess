@@ -7,7 +7,7 @@ fn snapshot_gas_usage() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, XConfessContract);
+    let contract_id = env.register(XConfessContract, ());
     let client = XConfessContractClient::new(&env, &contract_id);
 
     let mut report = serde_json::json!({});

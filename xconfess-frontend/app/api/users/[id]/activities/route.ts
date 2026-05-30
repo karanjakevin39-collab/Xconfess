@@ -1,17 +1,9 @@
-const BASE_API_URL = process.env.BACKEND_API_URL;
+import { internalProxyErrorResponse } from "@/app/lib/utils/proxyError";
+import { getApiBaseUrl } from "@/app/lib/config";
+
+const BASE_API_URL = getApiBaseUrl();
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
-  if (!BASE_API_URL) {
-    return new Response(
-      JSON.stringify({
-        message: "Server misconfiguration: BACKEND_API_URL is not set.",
-      }),
-      {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
 
   try {
     const { id } = params;
@@ -36,13 +28,6 @@ export async function GET(request: Request, { params }: { params: { id: string }
       },
     });
   } catch (error) {
-    console.error("Error proxying to backend:", error);
-    return new Response(
-      JSON.stringify({ message: "Internal server error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
+    return internalProxyErrorResponse({ route: "GET /api/users/[id]/activities" }, error);
   }
 }

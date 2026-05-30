@@ -9,16 +9,31 @@ import { SearchResults } from "@/app/components/search/SearchResults";
 import ErrorState from "@/app/components/common/ErrorState";
 import { useDebounce } from "@/app/lib/hooks/useDebounce";
 import { useSearch } from "@/app/lib/hooks/useSearch";
-import {
-  DEFAULT_FILTERS,
-  type SearchFilters,
-} from "@/app/lib/types/search";
+import { useAuth } from "@/app/lib/hooks/useAuth"; // Added to handle authenticated saved searches
+import { Card } from "@/app/components/ui/card"; // Reusing your UI package system
+import { Button } from "@/app/components/ui/button";
+import { DEFAULT_FILTERS, type SearchFilters } from "@/app/lib/types/search";
 import type { FilterChipKey } from "@/app/components/search/FilterChips";
-import { Filter, X } from "lucide-react";
+import {
+  Filter,
+  X,
+  HelpCircle,
+  Save,
+  HelpCircle as TooltipIcon,
+} from "lucide-react";
 import { cn } from "@/app/lib/utils/cn";
 import { useFocusTrap } from "@/app/lib/hooks/useFocusTrap";
 
 const DEBOUNCE_MS = 300;
+
+// Example clickable query seeds requested by Wave 5 criteria
+const EXAMPLE_SUGGESTIONS = [
+  "crypto",
+  "stellar",
+  "secret",
+  "developer",
+  "node",
+];
 
 function parseFiltersFromParams(params: URLSearchParams): SearchFilters {
   const sort = params.get("sort");
@@ -51,9 +66,12 @@ function parseFiltersFromParams(params: URLSearchParams): SearchFilters {
   return filters;
 }
 
-function filtersToSearchParams(filters: SearchFilters, query: string): URLSearchParams {
+function filtersToSearchParams(
+  filters: SearchFilters,
+  query: string,
+): URLSearchParams {
   const params = new URLSearchParams();
-  
+
   if (query.trim()) {
     params.set("q", query.trim());
   }
@@ -72,7 +90,7 @@ function filtersToSearchParams(filters: SearchFilters, query: string): URLSearch
   if (filters.gender) {
     params.set("gender", filters.gender);
   }
-  
+
   return params;
 }
 
@@ -81,7 +99,8 @@ function hasActiveFilters(f: SearchFilters): boolean {
     f.dateFrom ||
     f.dateTo ||
     (f.minReactions != null && f.minReactions > 0) ||
-    (f.sort && f.sort !== "newest")
+    (f.sort && f.sort !== "newest") ||
+    f.gender
   );
 }
 
@@ -89,11 +108,14 @@ export default function SearchPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { user } = useAuth(); // Hook validation for user persistence profile state
 
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<SearchFilters>({ ...DEFAULT_FILTERS });
   const [isInitialized, setIsInitialized] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -108,7 +130,8 @@ export default function SearchPage() {
 
   const debouncedQuery = useDebounce(query, DEBOUNCE_MS);
   const runSearch =
-    isInitialized && (debouncedQuery.trim().length > 0 || hasActiveFilters(filters));
+    isInitialized &&
+    (debouncedQuery.trim().length > 0 || hasActiveFilters(filters));
 
   const {
     results,
@@ -144,23 +167,35 @@ export default function SearchPage() {
         }
       : statusMeta;
 
-  const updateUrl = useCallback((q: string, f: SearchFilters) => {
-    const params = filtersToSearchParams(f, q);
-    const newUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    router.replace(newUrl, { scroll: false });
-  }, [pathname, router]);
+  // Stable single-direction parameter synchronization wrapper
+  const updateUrl = useCallback(
+    (q: string, f: SearchFilters) => {
+      const params = filtersToSearchParams(f, q);
+      const newUrl = params.toString()
+        ? `${pathname}?${params.toString()}`
+        : pathname;
+      router.push(newUrl, { scroll: false });
+    },
+    [pathname, router],
+  );
 
-  const handleSubmit = useCallback((q: string) => {
-    const trimmed = q.trim();
-    setQuery(trimmed);
-    updateUrl(trimmed, filters);
-  }, [filters, updateUrl]);
+  const handleSubmit = useCallback(
+    (q: string) => {
+      const trimmed = q.trim();
+      setQuery(trimmed);
+      updateUrl(trimmed, filters);
+    },
+    [filters, updateUrl],
+  );
 
-  const handleApplyFilters = useCallback((f: SearchFilters) => {
-    setFilters(f);
-    setSidebarOpen(false);
-    updateUrl(query, f);
-  }, [query, updateUrl]);
+  const handleApplyFilters = useCallback(
+    (f: SearchFilters) => {
+      setFilters(f);
+      setSidebarOpen(false);
+      updateUrl(query, f);
+    },
+    [query, updateUrl],
+  );
 
   const handleResetFilters = useCallback(() => {
     setFilters({ ...DEFAULT_FILTERS });
@@ -201,7 +236,7 @@ export default function SearchPage() {
         return;
       }
     },
-    [reset, updateUrl, query, filters]
+    [reset, updateUrl, query, filters],
   );
 
   const handleClearAll = useCallback(() => {
@@ -212,15 +247,28 @@ export default function SearchPage() {
     updateUrl("", DEFAULT_FILTERS);
   }, [reset, updateUrl]);
 
-  const handleSuggestion = useCallback((suggestion: string) => {
-    setQuery(suggestion);
-  }, []);
+  const handleSuggestion = useCallback(
+    (suggestion: string) => {
+      setQuery(suggestion);
+      updateUrl(suggestion, filters);
+    },
+    [filters, updateUrl],
+  );
+
+  // Handle execution placeholder mock for saved tracking
+  const handleSaveSearch = () => {
+    if (!user) return;
+    setSaveStatus("Search query saved successfully!");
+    setTimeout(() => setSaveStatus(null), 4000);
+  };
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
-        const el = document.querySelector<HTMLInputElement>("[data-search-input]");
+        const el = document.querySelector<HTMLInputElement>(
+          "[data-search-input]",
+        );
         el?.focus();
       }
     };
@@ -239,14 +287,51 @@ export default function SearchPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950">
-      <div className="container mx-auto py-6 px-4 lg:py-8 lg:px-6">
-        <header className="mb-6 lg:mb-8">
-          <h1 className="text-2xl font-bold text-white mb-2">
-            Search confessions
-          </h1>
-          <p className="text-zinc-400 text-sm lg:text-base">
-            Find confessions by keyword, date, reactions, and more.
-          </p>
+      <div className="container mx-auto py-6 px-4 sm:px-6 md:px-8 lg:py-8 lg:px-10">
+        <header className="mb-6 lg:mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-white mb-2">
+              Search confessions
+            </h1>
+            <p className="text-zinc-400 text-sm lg:text-base">
+              Find confessions by keyword, date, reactions, and more.
+            </p>
+          </div>
+
+          {/* ========================================================= */}
+          {/* CRITERIA 2: SAVED SEARCH AFFORDANCE ZONE                    */}
+          {/* ========================================================= */}
+          <div className="flex flex-col items-start md:items-end gap-1.5">
+            <div className="relative group inline-flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={user ? "default" : "outline"} //  "outline" matches your component rules
+                disabled={!user || !query.trim()}
+                className={cn(
+                  "gap-2 transition-all duration-200",
+                  !user &&
+                    "opacity-60 cursor-not-allowed bg-zinc-900 border-zinc-800 text-zinc-500",
+                )}
+              >
+                <Save className="h-4 w-4" />
+                Save Search
+              </Button>
+
+              {/* Dynamic inline explanation wrapper showing contextual data when locked */}
+              {!user && (
+                <div className="flex items-center gap-1.5 px-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs text-amber-500 max-w-xs">
+                  <HelpCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>Log in to enable saved search monitoring.</span>
+                </div>
+              )}
+            </div>
+            {saveStatus && (
+              <span className="text-xs text-emerald-400 animate-fade-in">
+                {saveStatus}
+              </span>
+            )}
+          </div>
         </header>
 
         <div className="mb-6 flex flex-col sm:flex-row gap-4">
@@ -263,8 +348,8 @@ export default function SearchPage() {
             type="button"
             onClick={() => setSidebarOpen((o) => !o)}
             className={cn(
-              "inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border bg-zinc-900 text-zinc-200 border-zinc-700 hover:bg-zinc-800 hover:border-zinc-600 transition-colors lg:hidden",
-              sidebarOpen && "bg-zinc-800 border-zinc-600"
+              "inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border bg-zinc-900 text-zinc-200 border-zinc-700 hover:bg-zinc-800 hover:border-zinc-600 transition-colors lg:hidden min-h-[44px]",
+              sidebarOpen && "bg-zinc-800 border-zinc-600",
             )}
             aria-expanded={sidebarOpen}
             aria-controls="search-filters-sidebar"
@@ -285,8 +370,8 @@ export default function SearchPage() {
               effectiveStatusMeta?.partial
                 ? { label: "Partial results", tone: "warning" }
                 : effectiveStatusMeta?.degraded
-                ? { label: "Degraded search", tone: "warning" }
-                : null
+                  ? { label: "Degraded search", tone: "warning" }
+                  : null
             }
           />
         </div>
@@ -296,7 +381,7 @@ export default function SearchPage() {
             id="search-filters-sidebar"
             className={cn(
               "lg:w-80 lg:shrink-0",
-              sidebarOpen ? "block" : "hidden lg:block"
+              sidebarOpen ? "block" : "hidden lg:block",
             )}
             role="complementary"
             aria-label="Search filters"
@@ -352,6 +437,58 @@ export default function SearchPage() {
                     />
                   </div>
                 )}
+
+                {/* ========================================================= */}
+                {/* CRITERIA 1: EXPLICIT ACTIONABLE EMPTY RESULT FALLBACK       */}
+                {/* ========================================================= */}
+                {isEmpty && (
+                  <Card className="p-6 md:p-8 text-center border border-zinc-800 bg-zinc-900/50 mb-6 max-w-2xl mx-auto">
+                    <div className="mx-auto w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mb-4">
+                      <HelpCircle className="h-6 w-6 text-zinc-400" />
+                    </div>
+                    <h3 className="text-lg font-medium text-zinc-200 mb-2">
+                      No matches found
+                    </h3>
+                    <p className="text-sm text-zinc-400 mb-6">
+                      Your current selection filters may be too narrow or the
+                      sequence doesn't exist. Try expanding your parameters or
+                      running an example query suggestion.
+                    </p>
+
+                    {/* Action Hub – Reset and interactive quick tokens */}
+                    <div className="flex flex-col items-center justify-center gap-4">
+                      {hasActiveFilterValues && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleClearAll}
+                          className="border-zinc-700 hover:bg-zinc-800 text-zinc-300"
+                        >
+                          Clear Active Search Filters
+                        </Button>
+                      )}
+
+                      <div className="w-full pt-4 border-t border-zinc-800/60">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider block mb-2.5">
+                          Try searching popular trends:
+                        </span>
+                        <div className="flex flex-wrap justify-center gap-2">
+                          {EXAMPLE_SUGGESTIONS.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => handleSuggestion(tag)}
+                              className="px-2.5 py-1 text-xs font-medium rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700/50"
+                            >
+                              #{tag}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                )}
+
                 <SearchResults
                   results={results}
                   query={debouncedQuery.trim() || undefined}

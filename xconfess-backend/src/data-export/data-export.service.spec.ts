@@ -43,6 +43,20 @@ describe('DataExportService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockExportRepository.findOne.mockReset();
+    mockExportRepository.find.mockReset();
+    mockExportRepository.create.mockReset();
+    mockExportRepository.save.mockReset();
+    mockExportRepository.update.mockReset();
+    mockChunkRepository.findOne.mockReset();
+    mockExportQueue.add.mockReset();
+    mockAuditLogService.logExportLifecycleEvent.mockReset();
+    mockAuditLogService.logExportLifecycleEvent.mockResolvedValue(undefined);
+    mockConfigService.get.mockImplementation((key: string, fallback?: string) => {
+      if (key === 'app.appSecret') return 'test-secret';
+      if (key === 'app.backendUrl') return 'https://backend.example.com';
+      return fallback;
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -129,11 +143,13 @@ describe('DataExportService', () => {
   });
 
   it('rejects duplicate request within seven days', async () => {
-    mockExportRepository.findOne.mockResolvedValue({
-      id: 'existing-1',
-      userId: '42',
-      createdAt: new Date(),
-    });
+    mockExportRepository.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'existing-1',
+        userId: '42',
+        createdAt: new Date(),
+      });
 
     await expect(service.requestExport('42')).rejects.toThrow(
       'Export allowed once every 7 days.',
@@ -354,18 +370,19 @@ describe('DataExportService', () => {
 
   // ── legacy tests (unchanged behaviour) ───────────────────────────────────
 
-  it('emits link-refreshed audit record when signed URL is generated', () => {
+  it('emits link-refreshed audit record when signed URL is generated', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-03-24T10:00:00.000Z'));
 
     try {
-      const url = service.generateSignedDownloadUrl('req-2', '77');
+      const url = await service.generateSignedDownloadUrl('req-2', '77');
 
       const parsed = new URL(url);
       const expires = parsed.searchParams.get('expires');
       const signature = parsed.searchParams.get('signature');
+      const token = parsed.searchParams.get('token');
       const expectedSignature = crypto
         .createHmac('sha256', 'test-secret')
-        .update(`req-2:77:${expires}`)
+        .update(`req-2:77:${expires}:${token}`)
         .digest('hex');
 
       expect(parsed.origin).toBe('https://backend.example.com');
@@ -417,16 +434,16 @@ describe('DataExportService', () => {
 
   // --- Chunked export tests ---
   describe('generateSignedDownloadUrl', () => {
-    it('should generate a valid URL for non-chunked export', () => {
-      const url = service.generateSignedDownloadUrl('req-123', 'user-456');
+    it('should generate a valid URL for non-chunked export', async () => {
+      const url = await service.generateSignedDownloadUrl('req-123', 'user-456');
       expect(url).toContain('/api/data-export/download/req-123');
       expect(url).toContain('userId=user-456');
       expect(url).toContain('signature=');
       expect(url).not.toContain('chunk=');
     });
 
-    it('should generate a valid URL for a specific chunk', () => {
-      const url = service.generateSignedDownloadUrl('req-123', 'user-456', 5);
+    it('should generate a valid URL for a specific chunk', async () => {
+      const url = await service.generateSignedDownloadUrl('req-123', 'user-456', 5);
       expect(url).toContain('/api/data-export/download/req-123');
       expect(url).toContain('userId=user-456');
       expect(url).toContain('chunk=5');
@@ -472,7 +489,7 @@ describe('DataExportService', () => {
       jest.useFakeTimers().setSystemTime(new Date('2026-03-25T11:00:00.000Z'));
 
       try {
-        const isStillValid = (service as any).isDownloadStillValid(request);
+        const isStillValid = (service as any).isFileAvailable(request);
         expect(isStillValid).toBe(false);
       } finally {
         jest.useRealTimers();
@@ -487,7 +504,7 @@ describe('DataExportService', () => {
       jest.useFakeTimers().setSystemTime(new Date('2026-03-25T11:00:00.000Z'));
 
       try {
-        const isStillValid = (service as any).isDownloadStillValid(request);
+        const isStillValid = (service as any).isFileAvailable(request);
         expect(isStillValid).toBe(true);
       } finally {
         jest.useRealTimers();
@@ -500,7 +517,7 @@ describe('DataExportService', () => {
 
       nonReadyStatuses.forEach((status) => {
         const request = { status, createdAt };
-        const isStillValid = (service as any).isDownloadStillValid(request);
+        const isStillValid = (service as any).isFileAvailable(request);
         expect(isStillValid).toBe(false);
       });
     });
@@ -563,17 +580,17 @@ describe('DataExportService', () => {
   // ── Download Token Invalidation and Regeneration Tests ─────────────────────
 
   describe('Download Token Security', () => {
-    it('should generate unique signatures for different expiry times', () => {
+    it('should generate unique signatures for different expiry times', async () => {
       jest.useFakeTimers();
 
       try {
         // First URL
         jest.setSystemTime(new Date('2026-03-25T10:00:00.000Z'));
-        const url1 = service.generateSignedDownloadUrl('req-1', 'user-1');
+        const url1 = await service.generateSignedDownloadUrl('req-1', 'user-1');
 
         // Second URL (different time = different expiry)
         jest.setSystemTime(new Date('2026-03-25T10:01:00.000Z'));
-        const url2 = service.generateSignedDownloadUrl('req-1', 'user-1');
+        const url2 = await service.generateSignedDownloadUrl('req-1', 'user-1');
 
         const signature1 = new URL(url1).searchParams.get('signature');
         const signature2 = new URL(url2).searchParams.get('signature');
@@ -584,9 +601,9 @@ describe('DataExportService', () => {
       }
     });
 
-    it('should generate unique signatures for different users', () => {
-      const url1 = service.generateSignedDownloadUrl('req-1', 'user-1');
-      const url2 = service.generateSignedDownloadUrl('req-1', 'user-2');
+    it('should generate unique signatures for different users', async () => {
+      const url1 = await service.generateSignedDownloadUrl('req-1', 'user-1');
+      const url2 = await service.generateSignedDownloadUrl('req-1', 'user-2');
 
       const signature1 = new URL(url1).searchParams.get('signature');
       const signature2 = new URL(url2).searchParams.get('signature');
@@ -594,9 +611,9 @@ describe('DataExportService', () => {
       expect(signature1).not.toBe(signature2);
     });
 
-    it('should generate unique signatures for different request IDs', () => {
-      const url1 = service.generateSignedDownloadUrl('req-1', 'user-1');
-      const url2 = service.generateSignedDownloadUrl('req-2', 'user-1');
+    it('should generate unique signatures for different request IDs', async () => {
+      const url1 = await service.generateSignedDownloadUrl('req-1', 'user-1');
+      const url2 = await service.generateSignedDownloadUrl('req-2', 'user-1');
 
       const signature1 = new URL(url1).searchParams.get('signature');
       const signature2 = new URL(url2).searchParams.get('signature');
@@ -604,9 +621,9 @@ describe('DataExportService', () => {
       expect(signature1).not.toBe(signature2);
     });
 
-    it('should include chunk index in signature for chunked exports', () => {
-      const url1 = service.generateSignedDownloadUrl('req-1', 'user-1', 0);
-      const url2 = service.generateSignedDownloadUrl('req-1', 'user-1', 1);
+    it('should include chunk index in signature for chunked exports', async () => {
+      const url1 = await service.generateSignedDownloadUrl('req-1', 'user-1', 0);
+      const url2 = await service.generateSignedDownloadUrl('req-1', 'user-1', 1);
 
       const signature1 = new URL(url1).searchParams.get('signature');
       const signature2 = new URL(url2).searchParams.get('signature');
@@ -689,50 +706,57 @@ describe('DataExportService', () => {
     it('should handle rapid status transitions correctly', async () => {
       const requestId = 'req-rapid';
       const userId = 'user-rapid';
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-25T10:10:00.000Z'));
 
-      // Start with PENDING
-      mockExportRepository.findOne.mockResolvedValue({
-        id: requestId,
-        userId,
-        status: 'PENDING',
-        createdAt: new Date('2026-03-25T10:00:00.000Z'),
-        queuedAt: new Date('2026-03-25T10:00:01.000Z'),
-        processingAt: null,
-        completedAt: null,
-        failedAt: null,
-        expiredAt: null,
-        retryCount: 0,
-        lastFailureReason: null,
-      } as ExportRequest);
+      try {
+        // Start with PENDING
+        const pendingRequest = {
+          id: requestId,
+          userId,
+          status: 'PENDING',
+          createdAt: new Date('2026-03-25T10:00:00.000Z'),
+          queuedAt: new Date('2026-03-25T10:00:01.000Z'),
+          processingAt: null,
+          completedAt: null,
+          failedAt: null,
+          expiredAt: null,
+          retryCount: 0,
+          lastFailureReason: null,
+        } as ExportRequest;
+        mockExportRepository.findOne.mockResolvedValue(pendingRequest);
 
-      let status = await service.getJobStatus(requestId, userId);
-      expect(status.status).toBe('PENDING');
+        let status = await service.getJobStatus(requestId, userId);
+        expect(status.status).toBe('PENDING');
 
-      // Transition to PROCESSING
-      mockExportRepository.findOne.mockResolvedValue({
-        ...mockExportRepository.findOne.mock.results[0].value,
-        status: 'PROCESSING',
-        processingAt: new Date('2026-03-25T10:01:00.000Z'),
-      });
+        // Transition to PROCESSING
+        mockExportRepository.findOne.mockResolvedValue({
+          ...pendingRequest,
+          status: 'PROCESSING',
+          processingAt: new Date('2026-03-25T10:01:00.000Z'),
+        });
 
-      status = await service.getJobStatus(requestId, userId);
-      expect(status.status).toBe('PROCESSING');
-      expect(status.progress.processingAt).toEqual(
-        new Date('2026-03-25T10:01:00.000Z'),
-      );
+        status = await service.getJobStatus(requestId, userId);
+        expect(status.status).toBe('PROCESSING');
+        expect(status.progress.processingAt).toEqual(
+          new Date('2026-03-25T10:01:00.000Z'),
+        );
 
-      // Transition to READY
-      mockExportRepository.findOne.mockResolvedValue({
-        ...mockExportRepository.findOne.mock.results[1].value,
-        status: 'READY',
-        completedAt: new Date('2026-03-25T10:05:00.000Z'),
-      });
+        // Transition to READY
+        mockExportRepository.findOne.mockResolvedValue({
+          ...pendingRequest,
+          status: 'READY',
+          processingAt: new Date('2026-03-25T10:01:00.000Z'),
+          completedAt: new Date('2026-03-25T10:05:00.000Z'),
+        });
 
-      status = await service.getJobStatus(requestId, userId);
-      expect(status.status).toBe('READY');
-      expect(status.progress.completedAt).toEqual(
-        new Date('2026-03-25T10:05:00.000Z'),
-      );
+        status = await service.getJobStatus(requestId, userId);
+        expect(status.status).toBe('READY');
+        expect(status.progress.completedAt).toEqual(
+          new Date('2026-03-25T10:05:00.000Z'),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('should preserve retry history across status transitions', async () => {
@@ -784,6 +808,88 @@ describe('DataExportService', () => {
       expect(status.progress.retryCount).toBe(3);
       expect(status.progress.lastFailureReason).toBe('memory limit exceeded');
       expect(status.progress.completedAt).toBeNull();
+    });
+  });
+
+  // ── Issue #789: download token expiry ────────────────────────────────────
+
+  describe('validateAndConsumeToken — token lifecycle (issue #789)', () => {
+    const requestId = 'req-token-test';
+    const userId = 'user-token-test';
+    const validToken = 'abc123';
+
+    it('returns true and invalidates a fresh, unconsumed token within TTL', async () => {
+      mockExportRepository.findOne.mockResolvedValueOnce({
+        downloadToken: validToken,
+        downloadedAt: null,
+        createdAt: new Date(), // just now — within 24 h TTL
+        status: 'READY',
+      } as Partial<ExportRequest>);
+      mockExportRepository.update.mockResolvedValueOnce({ affected: 1 });
+
+      const result = await service.validateAndConsumeToken(requestId, userId, validToken);
+
+      expect(result).toBe(true);
+      expect(mockExportRepository.update).toHaveBeenCalledWith(
+        requestId,
+        expect.objectContaining({ downloadToken: null }),
+      );
+    });
+
+    it('returns false when token does not match', async () => {
+      mockExportRepository.findOne.mockResolvedValueOnce({
+        downloadToken: 'different-token',
+        downloadedAt: null,
+        createdAt: new Date(),
+        status: 'READY',
+      } as Partial<ExportRequest>);
+
+      const result = await service.validateAndConsumeToken(requestId, userId, validToken);
+
+      expect(result).toBe(false);
+      expect(mockExportRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('returns false when token was already consumed (downloadedAt is set)', async () => {
+      mockExportRepository.findOne.mockResolvedValueOnce({
+        downloadToken: validToken,
+        downloadedAt: new Date('2026-01-01T00:00:00Z'), // already used
+        createdAt: new Date(),
+        status: 'READY',
+      } as Partial<ExportRequest>);
+
+      const result = await service.validateAndConsumeToken(requestId, userId, validToken);
+
+      expect(result).toBe(false);
+      expect(mockExportRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('returns false and marks token expired when retention window has elapsed', async () => {
+      const expiredCreatedAt = new Date(Date.now() - 25 * 60 * 60 * 1000); // 25 h ago
+      mockExportRepository.findOne.mockResolvedValueOnce({
+        downloadToken: validToken,
+        downloadedAt: null,
+        createdAt: expiredCreatedAt,
+        status: 'READY',
+      } as Partial<ExportRequest>);
+      mockExportRepository.update.mockResolvedValueOnce({ affected: 1 });
+
+      const result = await service.validateAndConsumeToken(requestId, userId, validToken);
+
+      expect(result).toBe(false);
+      // The token must be cleared and expiredAt stamped so the record reflects terminal state.
+      expect(mockExportRepository.update).toHaveBeenCalledWith(
+        requestId,
+        expect.objectContaining({ downloadToken: null }),
+      );
+    });
+
+    it('returns false when record not found', async () => {
+      mockExportRepository.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.validateAndConsumeToken(requestId, userId, 'any-token');
+
+      expect(result).toBe(false);
     });
   });
 });

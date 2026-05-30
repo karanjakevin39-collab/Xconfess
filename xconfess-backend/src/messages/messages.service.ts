@@ -21,6 +21,12 @@ import {
   MessageRepository,
   ThreadViewerRole,
 } from './repository/message.repository';
+import {
+  decodeCursor,
+  encodeCursor,
+  CursorPaginatedResponseDto,
+} from '../common/pagination';
+import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
 
 @Injectable()
 export class MessagesService {
@@ -120,7 +126,8 @@ export class MessagesService {
     confessionId: string,
     senderId: string,
     user: User,
-  ): Promise<Message[]> {
+    query?: GetMessagesQueryDto,
+  ): Promise<CursorPaginatedResponseDto<Message>> {
     if (!confessionId || confessionId.trim() === '') {
       throw new BadRequestException('Invalid confession ID');
     }
@@ -150,31 +157,100 @@ export class MessagesService {
       viewerRole,
     );
 
-    return this.messageRepository.find({
-      where: {
-        confession: { id: confessionId },
-        sender: { id: senderId },
-      },
-      order: { createdAt: 'ASC' }, // Use ASC for chat-like order
-    });
+    const limit = query?.limit || 20;
+
+    const qb = this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.confessionId = :confessionId', { confessionId })
+      .andWhere('message.senderId = :senderId', { senderId });
+
+    if (query?.cursor) {
+      const parsedCursor = decodeCursor<{ id: number; createdAt: string }>(
+        query.cursor,
+      );
+      if (parsedCursor) {
+        qb.andWhere(
+          'message.createdAt > :cursorDate OR (message.createdAt = :cursorDate AND message.id > :cursorId)',
+          {
+            cursorDate: parsedCursor.createdAt,
+            cursorId: parsedCursor.id,
+          },
+        );
+      }
+    } else if (query?.page && query.page > 1) {
+      qb.skip((query.page - 1) * limit);
+    }
+
+    const messages = await qb
+      .orderBy('message.createdAt', 'ASC')
+      .take(limit + 1)
+      .getMany();
+
+    const hasMore = messages.length > limit;
+    const resultMessages = hasMore ? messages.slice(0, limit) : messages;
+
+    let nextCursor: string | null = null;
+    if (hasMore && resultMessages.length > 0) {
+      const lastMessage = resultMessages[resultMessages.length - 1];
+      nextCursor = encodeCursor({
+        id: lastMessage.id,
+        createdAt: lastMessage.createdAt.toISOString(),
+      });
+    }
+
+    return new CursorPaginatedResponseDto(
+      resultMessages,
+      nextCursor,
+      hasMore,
+      limit,
+    );
   }
 
-  async findAllThreadsForUser(user: User): Promise<any[]> {
+  async findAllThreadsForUser(
+    user: User,
+    query: GetMessagesQueryDto,
+  ): Promise<CursorPaginatedResponseDto<any>> {
     const userAnons = await this.userAnonRepo.find({
       where: { userId: user.id },
     });
     const anonIds = userAnons.map((ua) => ua.anonymousUserId);
 
-    if (anonIds.length === 0) return [];
+    if (anonIds.length === 0) {
+      return new CursorPaginatedResponseDto([], null, false, query.limit || 20);
+    }
 
-    const messages = await this.messageRepository.find({
-      where: [
+    const qb = this.messageRepository
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.confession', 'confession')
+      .leftJoinAndSelect('m.sender', 'sender')
+      .leftJoinAndSelect('confession.anonymousUser', 'confessionAuthor')
+      .where([
         { sender: { id: In(anonIds) } },
         { confession: { anonymousUser: { id: In(anonIds) } } },
-      ],
-      relations: ['confession', 'sender', 'confession.anonymousUser'],
-      order: { createdAt: 'DESC' },
-    });
+      ]);
+
+    if (query.cursor) {
+      const parsedCursor = decodeCursor<{ id: string; lastMessageAt: string }>(
+        query.cursor,
+      );
+      if (parsedCursor) {
+        qb.andWhere('m.createdAt < :cursorDate', {
+          cursorDate: parsedCursor.lastMessageAt,
+        });
+      }
+    } else if (query.page && query.page > 1) {
+      // Offset pagination for threads is hard with this in-memory grouping,
+      // but we can try to limit the message fetch.
+      // For now, only cursor pagination is truly supported for threads.
+    }
+
+    // We fetch a larger pool of messages to ensure we get enough threads
+    // This is still a bit of a hack until a proper Thread entity exists.
+    const messageLimit = (query.limit || 20) * 10;
+    const messages = await qb
+      .orderBy('m.createdAt', 'DESC')
+      .take(messageLimit)
+      .getMany();
 
     const threadsMap = new Map();
 
@@ -225,7 +301,26 @@ export class MessagesService {
       }
     });
 
-    return Array.from(threadsMap.values());
+    const allThreads = Array.from(threadsMap.values());
+    const limit = query.limit || 20;
+    const hasMore = allThreads.length > limit;
+    const resultThreads = hasMore ? allThreads.slice(0, limit) : allThreads;
+
+    let nextCursor: string | null = null;
+    if (hasMore && resultThreads.length > 0) {
+      const lastThread = resultThreads[resultThreads.length - 1];
+      nextCursor = encodeCursor({
+        id: `${lastThread.confessionId}_${lastThread.senderId}`,
+        lastMessageAt: lastThread.lastMessageAt.toISOString(),
+      });
+    }
+
+    return new CursorPaginatedResponseDto(
+      resultThreads,
+      nextCursor,
+      hasMore,
+      limit,
+    );
   }
 
   async reply(dto: ReplyMessageDto, user: User): Promise<Message> {

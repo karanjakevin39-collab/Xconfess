@@ -1,9 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ChevronRight, Eye, AlertCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronRight,
+  Eye,
+  AlertCircle,
+  RefreshCw,
+  FileQuestion,
+} from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
 import { ReactionButton } from "@/app/components/confession/ReactionButtons";
@@ -12,8 +20,10 @@ import { ShareButton } from "@/app/components/confession/ShareButton";
 import { CommentSection } from "@/app/components/confession/CommentSection";
 import { RelatedConfessions } from "@/app/components/confession/RelatedConfessions";
 import { formatDate } from "@/app/lib/utils/formatDate";
+import { queryKeys } from "@/app/lib/api/queryKeys";
 import { useAuth } from "@/app/lib/hooks/useAuth";
 import { getConfessionById } from "@/app/lib/api/confessions";
+import { createConfessionReport } from "@/app/lib/api/reports";
 
 interface ConfessionDetailClientProps {
   initialConfession: {
@@ -25,7 +35,7 @@ interface ConfessionDetailClientProps {
     commentCount?: number;
     isAnchored?: boolean;
     stellarTxHash?: string | null;
-  };
+  } | null; // Changed to allow null for explicit 404 tracking
   confessionId: string;
 }
 
@@ -35,25 +45,192 @@ export function ConfessionDetailClient({
 }: ConfessionDetailClientProps) {
   const router = useRouter();
   const { user } = useAuth();
-  const [confession, setConfession] = useState(initialConfession);
-  const [refetching, setRefetching] = useState(false);
+  const [reportStatus, setReportStatus] = useState<
+    "idle" | "pending" | "success" | "error"
+  >("idle");
+  const [reportError, setReportError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setConfession(initialConfession);
-  }, [initialConfession]);
+  // Core data hook setup modified to catch distinct error streams
+  const {
+    data: confession,
+    isLoading,
+    isError,
+    error,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey: queryKeys.confessions.detail(confessionId),
+    queryFn: async () => {
+      const result = await getConfessionById(confessionId);
+      // Explicit 404 check mapping using the error object parameters
+      if (
+        !result.ok &&
+        result.error &&
+        "status" in result.error &&
+        result.error.status === 404
+      ) {
+        throw new Error("NOT_FOUND");
+      }
 
-const refetch = async () => {
-  setRefetching(true);
-  const result = await getConfessionById(confessionId);
-  if (result.ok && result.data) {
-    setConfession(result.data);
+      if (!result.ok) {
+        throw new Error("NETWORK_FAILURE");
+      }
+      return result.data;
+    },
+    initialData: initialConfession ?? undefined,
+    retry: 1,
+  });
+
+  const submitReport = async () => {
+    if (reportStatus === "pending" || reportStatus === "success") return;
+
+    setReportStatus("pending");
+    setReportError(null);
+
+    try {
+      const result = await createConfessionReport(confessionId, {
+        type: "other",
+      });
+
+      if (result.ok) {
+        setReportStatus("success");
+      } else {
+        setReportStatus("error");
+        setReportError(result.error.message);
+      }
+    } catch (err) {
+      setReportStatus("error");
+      setReportError(
+        err instanceof Error ? err.message : "Report submission failed.",
+      );
+    }
+  };
+
+  // ==========================================
+  // STATE 1: REUSABLE STABLE LAYOUT SKELETON
+  // ==========================================
+  if (isLoading && !confession) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 animate-pulse">
+        <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
+          {/* Breadcrumb Skeleton */}
+          <div className="mb-6 flex items-center gap-4 h-9">
+            <div className="h-8 w-16 bg-zinc-200 dark:bg-zinc-800 rounded" />
+            <div className="h-4 w-32 bg-zinc-200 dark:bg-zinc-800 rounded" />
+          </div>
+
+          {/* Main Card Layout Mimic Block */}
+          <Card className="mb-8 border border-zinc-200 dark:border-zinc-800">
+            <CardHeader className="pb-4">
+              <div className="h-4 w-40 bg-zinc-200 dark:bg-zinc-800 rounded" />
+            </CardHeader>
+            <CardContent>
+              {/* Main text content layout mocks */}
+              <div className="space-y-3">
+                <div className="h-5 w-full bg-zinc-200 dark:bg-zinc-800 rounded" />
+                <div className="h-5 w-11/12 bg-zinc-200 dark:bg-zinc-800 rounded" />
+                <div className="h-5 w-4/5 bg-zinc-200 dark:bg-zinc-800 rounded" />
+              </div>
+
+              {/* Action Rows explicitly matched to prevent overlap jumps */}
+              <div className="mt-6 pt-6 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+                <div className="flex gap-3">
+                  <div className="h-9 w-16 bg-zinc-200 dark:bg-zinc-800 rounded-full" />
+                  <div className="h-9 w-16 bg-zinc-200 dark:bg-zinc-800 rounded-full" />
+                  <div className="h-9 w-24 bg-zinc-200 dark:bg-zinc-800 rounded-full" />
+                </div>
+                <div className="h-9 w-12 bg-zinc-200 dark:bg-zinc-800 rounded-full" />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Report Pin Skeleton */}
+          <div className="mb-8 flex justify-end">
+            <div className="h-8 w-20 bg-zinc-200 dark:bg-zinc-800 rounded" />
+          </div>
+
+          {/* Comment Thread Skeleton block layout */}
+          <div className="mb-10 p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl space-y-4">
+            <div className="h-10 w-full bg-zinc-200 dark:bg-zinc-800 rounded-lg" />
+            <div className="space-y-2 pt-2">
+              <div className="h-4 w-1/4 bg-zinc-200 dark:bg-zinc-800 rounded" />
+              <div className="h-4 w-full bg-zinc-200 dark:bg-zinc-800 rounded" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
-  setRefetching(false);
-};
 
+  // ==========================================
+  // STATE 2: DISTINCT NOT FOUND (404) BOUNDARY
+  // ==========================================
+  if (isError && error?.message === "NOT_FOUND") {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full border border-zinc-200 dark:border-zinc-800 text-center p-6 shadow-xl">
+          <div className="mx-auto w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-950 flex items-center justify-center mb-4">
+            <FileQuestion className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+          </div>
+          <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+            Confession Missing
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">
+            The record you are looking for does not exist in our cryptographic
+            memory database. It may have been retracted or modified.
+          </p>
+          <div className="flex gap-3 justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push("/")}
+            >
+              Back to Feed
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // STATE 3: DISTINCT NETWORK FAILURE BOUNDARY
+  // ==========================================
+  if (isError || !confession) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full border border-zinc-200 dark:border-zinc-800 text-center p-6 shadow-xl">
+          <div className="mx-auto w-12 h-12 rounded-full bg-red-100 dark:bg-red-950 flex items-center justify-center mb-4">
+            <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+          </div>
+          <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+            Connection Interrupted
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-6">
+            Could not fetch data from Xconfess server network. Check your data
+            stream and reload.
+          </p>
+          <div className="flex gap-3 justify-center">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => void refetch()}
+              className="gap-2"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Retry Connection
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const dateLabel = formatDate(new Date(confession.createdAt));
 
+  // ==========================================
+  // STATE 4: STANDARD RENDER DATA SUITE
+  // ==========================================
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-950">
       <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
@@ -104,12 +281,12 @@ const refetch = async () => {
             </div>
           </CardHeader>
           <CardContent className="pt-0">
-            <p className="text-white text-lg leading-relaxed whitespace-pre-wrap wrap-break-word overflow-wrap-anywhere">
+            <p className="text-zinc-900 dark:text-white text-lg leading-relaxed whitespace-pre-wrap wrap-break-word overflow-wrap-anywhere">
               {confession.content}
             </p>
 
             {/* Reactions + Anchor + Share */}
-            <div className="mt-6 pt-6 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-4">
+            <div className="mt-6 pt-6 border-t border-zinc-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3">
                 <ReactionButton
                   type="like"
@@ -126,7 +303,9 @@ const refetch = async () => {
                   confessionContent={confession.content}
                   isAnchored={confession.isAnchored}
                   stellarTxHash={confession.stellarTxHash}
-                  onAnchorSuccess={() => refetch()}
+                  onAnchorSuccess={() => {
+                    void refetch();
+                  }}
                 />
               </div>
               <ShareButton confessionId={confessionId} variant="dropdown" />
@@ -140,27 +319,50 @@ const refetch = async () => {
               </p>
             )}
 
-            {refetching && (
+            {isFetching && (
               <p className="mt-2 text-xs text-zinc-500">Updating…</p>
             )}
           </CardContent>
         </Card>
 
-        {/* Report (placeholder) */}
+        {/* Report Section */}
         <div className="mb-8 flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-zinc-500 hover:text-zinc-400"
-         onClick={() => window.open(`mailto:abuse@xconfess.app?subject=Report+${confessionId}`)}
-            aria-label="Report confession (coming soon)"
-          >
-            <AlertCircle className="h-4 w-4 mr-1" />
-            Report
-          </Button>
+          <div className="flex flex-col items-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-zinc-500 hover:text-zinc-400"
+              disabled={
+                reportStatus === "pending" || reportStatus === "success"
+              }
+              onClick={submitReport}
+              aria-label="Report confession"
+            >
+              <AlertCircle className="h-4 w-4 mr-1" />
+              {reportStatus === "pending"
+                ? "Reporting..."
+                : reportStatus === "success"
+                  ? "Reported"
+                  : "Report"}
+            </Button>
+
+            {reportStatus === "pending" && (
+              <p className="mt-2 text-xs text-zinc-500">Submitting report…</p>
+            )}
+            {reportStatus === "success" && (
+              <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+                Report submitted. Thank you!
+              </p>
+            )}
+            {reportStatus === "error" && (
+              <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                {reportError || "Report submission failed."}
+              </p>
+            )}
+          </div>
         </div>
 
-        {/* Comments */}
+        {/* Comments Section Container */}
         <div className="mb-10">
           <CommentSection
             confessionId={confessionId}

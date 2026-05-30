@@ -10,12 +10,15 @@ export interface Draft {
   gender?: Gender;
   savedAt: number;
   characterCount: number;
-  scheduledFor?: string; // Issue #454: Preserves scheduling metadata
-  timezone?: string;     // Issue #454: Preserves scheduling metadata
+  scheduledFor?: string;
+  timezone?: string;
 }
 
 const STORAGE_KEY = "xconfess-drafts";
 const MAX_DRAFTS = 10;
+
+// Issue #678: Global flag to suppress repeated console noise in local dev/private browsing
+let hasWarnedStorageError = false;
 
 export function useDrafts() {
   const [drafts, setDrafts] = useState<Draft[]>(() => {
@@ -26,7 +29,7 @@ export function useDrafts() {
           return JSON.parse(stored) as Draft[];
         }
       } catch (error) {
-        console.error("Failed to load drafts:", error);
+        // Suppress initial load error noise
       }
     }
     return [];
@@ -40,7 +43,7 @@ export function useDrafts() {
           const newDrafts = JSON.parse(e.newValue) as Draft[];
           setDrafts(newDrafts);
         } catch (error) {
-          console.error("Failed to sync drafts from storage:", error);
+          // Suppress sync error noise
         }
       }
     };
@@ -50,14 +53,23 @@ export function useDrafts() {
   }, []);
 
   const saveDrafts = useCallback((newDrafts: Draft[]) => {
+    const sorted = [...newDrafts]
+      .sort((a, b) => b.savedAt - a.savedAt)
+      .slice(0, MAX_DRAFTS);
+
+    // Update state first to keep the app resilient in-memory
+    setDrafts(sorted);
+
     try {
-      const sorted = [...newDrafts]
-        .sort((a, b) => b.savedAt - a.savedAt)
-        .slice(0, MAX_DRAFTS);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(sorted));
-      setDrafts(sorted);
     } catch (error) {
-      console.error("Failed to save drafts:", error);
+      // Issue #678: Replace repeated logging with a single user-friendly fallback path
+      if (!hasWarnedStorageError) {
+        console.warn(
+          "Xconfess: Draft persistence unavailable (localStorage). Drafts will not be saved across refreshes.",
+        );
+        hasWarnedStorageError = true;
+      }
     }
   }, []);
 
@@ -70,52 +82,47 @@ export function useDrafts() {
         characterCount: (draft.title?.length || 0) + draft.body.length,
       };
 
-      setDrafts((prev) => {
-        const updated = [newDraft, ...prev.filter((d) => d.id !== newDraft.id)];
-        saveDrafts(updated);
-        return updated;
-      });
+      const updated = [newDraft, ...drafts.filter((d) => d.id !== newDraft.id)];
+      saveDrafts(updated);
 
       return newDraft.id;
     },
-    [saveDrafts],
+    [drafts, saveDrafts],
   );
 
   const updateDraft = useCallback(
     (id: string, updates: Partial<Omit<Draft, "id" | "savedAt">>) => {
-      setDrafts((prev) => {
-        const updated = prev.map((draft) =>
-          draft.id === id
-            ? {
-                ...draft,
-                ...updates,
-                savedAt: Date.now(),
-                characterCount:
-                  (updates.title?.length || draft.title?.length || 0) +
-                  (updates.body?.length || draft.body.length),
-              }
-            : draft,
-        );
-        saveDrafts(updated);
-        return updated;
-      });
+      const updated = drafts.map((draft) =>
+        draft.id === id
+          ? {
+              ...draft,
+              ...updates,
+              savedAt: Date.now(),
+              characterCount:
+                (updates.title?.length || draft.title?.length || 0) +
+                (updates.body?.length || draft.body.length),
+            }
+          : draft,
+      );
+      saveDrafts(updated);
     },
-    [saveDrafts],
+    [drafts, saveDrafts],
   );
 
   const deleteDraft = useCallback(
     (id: string) => {
-      setDrafts((prev) => {
-        const updated = prev.filter((d) => d.id !== id);
-        saveDrafts(updated);
-        return updated;
-      });
+      const updated = drafts.filter((d) => d.id !== id);
+      saveDrafts(updated);
     },
-    [saveDrafts],
+    [drafts, saveDrafts],
   );
 
   const clearDrafts = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      // Silent fail
+    }
     setDrafts([]);
   }, []);
 

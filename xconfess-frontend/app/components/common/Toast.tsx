@@ -120,11 +120,33 @@ const ToastItem: React.FC<ToastProps> = ({ toast, onRemove }) => {
     >
       <div className={`flex-shrink-0 ${getTextColor()}`}>{getIcon()}</div>
       <div className={`flex-grow ${getTextColor()} text-sm font-medium`}>
-        {toast.message}
+        <span>{toast.message}</span>
+        {/* Issue #801 — surface requestId on failure toasts for support correlation */}
+        {toast.requestId && (toast.type === 'error' || toast.type === 'warning') && (
+          <p className="mt-1 font-mono text-[10px] opacity-60 select-all">
+            ID: {toast.requestId}
+          </p>
+        )}
       </div>
+      {toast.action && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            toast.action?.onClick();
+            onRemove(toast.id);
+          }}
+          className={`
+            flex-shrink-0 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider
+            bg-white/20 hover:bg-white/30 transition-colors duration-200
+            ${getTextColor()}
+          `}
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={() => onRemove(toast.id)}
-        className={`flex-shrink-0 ml-2 ${getTextColor()} hover:opacity-70 transition-opacity`}
+        className={`flex-shrink-0 ml-1 ${getTextColor()} hover:opacity-70 transition-opacity`}
         aria-label="Close notification"
       >
         <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">

@@ -80,64 +80,20 @@ describe('Admin API - Notification Jobs', () => {
       await expect(adminApi.getFailedNotificationJobs()).rejects.toThrow('Network error');
     });
 
-    it('should return mock data when mock mode is enabled', async () => {
-      // Enable mock mode
+    it('should not depend on localStorage admin mock toggles', async () => {
+      (apiClient.get as jest.Mock).mockResolvedValue({
+        data: { jobs: [], total: 0, page: 1, limit: 20 },
+      });
+
+      const getItem = jest.fn();
       Object.defineProperty(window, 'localStorage', {
-        value: {
-          getItem: jest.fn((key) => (key === 'adminMock' ? 'true' : null)),
-          setItem: jest.fn(),
-          removeItem: jest.fn(),
-        },
+        value: { getItem },
         writable: true,
       });
 
-      const result = await adminApi.getFailedNotificationJobs();
+      await adminApi.getFailedNotificationJobs();
 
-      expect(result.jobs).toBeDefined();
-      expect(Array.isArray(result.jobs)).toBe(true);
-      expect(apiClient.get).not.toHaveBeenCalled();
-    });
-
-    it('should filter mock data by date range', async () => {
-      // Enable mock mode
-      Object.defineProperty(window, 'localStorage', {
-        value: {
-          getItem: jest.fn((key) => (key === 'adminMock' ? 'true' : null)),
-          setItem: jest.fn(),
-          removeItem: jest.fn(),
-        },
-        writable: true,
-      });
-
-      const futureDate = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-
-      const result = await adminApi.getFailedNotificationJobs({
-        startDate: futureDate,
-      });
-
-      // Should filter out jobs that failed before the start date
-      expect(result.jobs.length).toBe(0);
-    });
-
-    it('should paginate mock data correctly', async () => {
-      // Enable mock mode
-      Object.defineProperty(window, 'localStorage', {
-        value: {
-          getItem: jest.fn((key) => (key === 'adminMock' ? 'true' : null)),
-          setItem: jest.fn(),
-          removeItem: jest.fn(),
-        },
-        writable: true,
-      });
-
-      const result = await adminApi.getFailedNotificationJobs({
-        page: 1,
-        limit: 1,
-      });
-
-      expect(result.jobs.length).toBeLessThanOrEqual(1);
-      expect(result.page).toBe(1);
-      expect(result.limit).toBe(1);
+      expect(getItem).not.toHaveBeenCalled();
     });
   });
 
@@ -183,24 +139,6 @@ describe('Admin API - Notification Jobs', () => {
       await expect(adminApi.replayFailedNotificationJob('invalid-job')).rejects.toThrow(
         'Job not found'
       );
-    });
-
-    it('should return mock response when mock mode is enabled', async () => {
-      // Enable mock mode
-      Object.defineProperty(window, 'localStorage', {
-        value: {
-          getItem: jest.fn((key) => (key === 'adminMock' ? 'true' : null)),
-          setItem: jest.fn(),
-          removeItem: jest.fn(),
-        },
-        writable: true,
-      });
-
-      const result = await adminApi.replayFailedNotificationJob('job-123');
-
-      expect(result.success).toBe(true);
-      expect(result.jobId).toBe('job-123');
-      expect(apiClient.post).not.toHaveBeenCalled();
     });
 
     it('should handle concurrent replay requests', async () => {

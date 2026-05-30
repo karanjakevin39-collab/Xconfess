@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfessionController } from './confession.controller';
 import { ConfessionService } from './confession.service';
 import { ConfessionViewCacheService } from './confession-view-cache.service';
+import { SearchDiscoveryService } from '../search-discovery/search-discovery.service';
 
 describe('ConfessionController - View Count', () => {
   let controller: ConfessionController;
@@ -24,6 +25,10 @@ describe('ConfessionController - View Count', () => {
             hasViewedRecently: jest.fn(),
             markViewed: jest.fn(),
           },
+        },
+        {
+          provide: SearchDiscoveryService,
+          useValue: { recordSearch: jest.fn() },
         },
       ],
     }).compile();

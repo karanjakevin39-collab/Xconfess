@@ -1,42 +1,58 @@
 import { Test } from '@nestjs/testing';
-import { ReportModule } from './reports.module';
+import { MODULE_METADATA } from '@nestjs/common/constants';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { ReportModule } from './report.module';
 import { ReportsService } from './reports.service';
 import { ReportsController } from './reports.controller';
-import { AdminReportsController } from './admin-reports.controller';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { Report } from '../admin/entities/report.entity';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
+import { OutboxEvent } from '../common/entities/outbox-event.entity';
+import { AuditLogService } from '../audit-log/audit-log.service';
+import { AuditLogModule } from '../audit-log/audit-log.module';
+import { AuthModule } from '../auth/auth.module';
+
+const mockRepository = () => ({
+  create: jest.fn(),
+  createQueryBuilder: jest.fn(),
+  findOne: jest.fn(),
+  manager: { transaction: jest.fn() },
+  save: jest.fn(),
+});
+
+async function compileReportTestingModule() {
+  return Test.createTestingModule({
+    controllers: [ReportsController],
+    providers: [
+      ReportsService,
+      { provide: getRepositoryToken(Report), useValue: mockRepository() },
+      {
+        provide: getRepositoryToken(AnonymousConfession),
+        useValue: mockRepository(),
+      },
+      { provide: getRepositoryToken(OutboxEvent), useValue: mockRepository() },
+      {
+        provide: AuditLogService,
+        useValue: {
+          findByEntity: jest.fn(),
+          logReport: jest.fn().mockResolvedValue(undefined),
+          logReportDismissed: jest.fn().mockResolvedValue(undefined),
+          logReportResolved: jest.fn().mockResolvedValue(undefined),
+        },
+      },
+    ],
+  }).compile();
+}
 
 describe('ReportModule', () => {
-  it('should compile module without DI errors', async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot({
-          type: 'sqlite',
-          database: ':memory:',
-          entities: [Report, AnonymousConfession],
-          synchronize: true,
-        }),
-        ReportModule,
-      ],
-    }).compile();
+  it('should compile report providers without DI errors', async () => {
+    const moduleRef = await compileReportTestingModule();
 
     expect(moduleRef).toBeDefined();
     await moduleRef.close();
   });
 
-  it('should resolve ReportsService with correct dependencies', async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot({
-          type: 'sqlite',
-          database: ':memory:',
-          entities: [Report, AnonymousConfession],
-          synchronize: true,
-        }),
-        ReportModule,
-      ],
-    }).compile();
+  it('should resolve ReportsService with repository dependencies', async () => {
+    const moduleRef = await compileReportTestingModule();
 
     const reportsService = moduleRef.get<ReportsService>(ReportsService);
     expect(reportsService).toBeDefined();
@@ -45,70 +61,51 @@ describe('ReportModule', () => {
     await moduleRef.close();
   });
 
-  it('should resolve all controllers', async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot({
-          type: 'sqlite',
-          database: ':memory:',
-          entities: [Report, AnonymousConfession],
-          synchronize: true,
-        }),
-        ReportModule,
-      ],
-    }).compile();
+  it('should resolve ReportsController', async () => {
+    const moduleRef = await compileReportTestingModule();
 
     const reportsController =
       moduleRef.get<ReportsController>(ReportsController);
-    const adminReportsController = moduleRef.get<AdminReportsController>(
-      AdminReportsController,
-    );
-
     expect(reportsController).toBeDefined();
-    expect(adminReportsController).toBeDefined();
 
     await moduleRef.close();
   });
 
-  it('should fail DI if AnonymousConfession is not in module imports', async () => {
-    // Create a module without AnonymousConfession to simulate the original issue
+  it('should fail DI if AnonymousConfession repository is missing', async () => {
     const faultyModule = Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot({
-          type: 'sqlite',
-          database: ':memory:',
-          entities: [Report, AnonymousConfession],
-          synchronize: true,
-        }),
-        TypeOrmModule.forFeature([Report]), // Missing AnonymousConfession
+      providers: [
+        ReportsService,
+        { provide: getRepositoryToken(Report), useValue: mockRepository() },
+        { provide: getRepositoryToken(OutboxEvent), useValue: mockRepository() },
+        { provide: AuditLogService, useValue: {} },
       ],
-      providers: [ReportsService],
-      controllers: [ReportsController, AdminReportsController],
+      controllers: [ReportsController],
     });
 
     await expect(faultyModule.compile()).rejects.toThrow();
   });
 
-  it('should have AnonymousConfession in TypeOrmModule.forFeature', async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot({
-          type: 'sqlite',
-          database: ':memory:',
-          entities: [Report, AnonymousConfession],
-          synchronize: true,
-        }),
-        ReportModule,
-      ],
-    }).compile();
+  it('should import repositories and modules needed by ReportModule', () => {
+    const imports = Reflect.getMetadata(
+      MODULE_METADATA.IMPORTS,
+      ReportModule,
+    ) as any[];
 
-    // Verify that the module can create repositories for both entities
-    const reportRepository = moduleRef.get('ReportRepository');
-    const confessionRepository = moduleRef.get('AnonymousConfessionRepository');
+    expect(imports).toEqual(expect.arrayContaining([AuditLogModule, AuthModule]));
 
-    expect(reportRepository).toBeDefined();
-    expect(confessionRepository).toBeDefined();
+    const typeOrmImport = imports.find(
+      (moduleImport) => moduleImport?.module === TypeOrmModule,
+    );
+    const providerTokens = (typeOrmImport?.providers ?? []).map(
+      (provider: { provide: unknown }) => provider.provide,
+    );
 
-    await moduleRef.close();
+    expect(providerTokens).toEqual(
+      expect.arrayContaining([
+        getRepositoryToken(Report),
+        getRepositoryToken(AnonymousConfession),
+        getRepositoryToken(OutboxEvent),
+      ]),
+    );
   });
 });

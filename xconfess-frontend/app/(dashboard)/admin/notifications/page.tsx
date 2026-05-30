@@ -3,11 +3,13 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/app/lib/api/admin';
+import { queryKeys } from '@/app/lib/api/queryKeys';
 import { ErrorBoundary } from '@/app/components/common/ErrorBoundary';
 import { TableSkeleton } from '@/app/components/common/SkeletonLoader';
-import { ConfirmDialog } from '@/app/components/admin/ConfirmDialog';
 import type { FailedNotificationJob, FailedJobsFilter } from '@/app/lib/types/notification-jobs';
 import { useDebounce } from '@/app/lib/hooks/useDebounce';
+import { useAdminConfirmation } from '@/app/components/admin/useAdminConfirmation';
+import { useDLQFilterState } from '@/app/lib/hooks/useDLQFilterState';
 
 export default function NotificationsPage() {
   return (
@@ -29,16 +31,22 @@ export default function NotificationsPage() {
 
 function FailedJobsList() {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<'failed' | 'all'>('failed');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [minRetries, setMinRetries] = useState<number | undefined>(undefined);
-  const [replayingJobId, setReplayingJobId] = useState<string | null>(null);
-  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const {
+    page,
+    setPage,
+    statusFilter,
+    setStatusFilter,
+    startDate,
+    setStartDate,
+    endDate,
+    setEndDate,
+    minRetries,
+    setMinRetries,
+  } = useDLQFilterState();
   const [pendingReplays, setPendingReplays] = useState<Set<string>>(new Set());
+  const { openConfirmation, confirmDialog } = useAdminConfirmation();
 
-  // Debounce filter changes to avoid excessive API calls
+  // Debounce date values to avoid excessive API calls while typing
   const debouncedStartDate = useDebounce(startDate, 500);
   const debouncedEndDate = useDebounce(endDate, 500);
 
@@ -60,37 +68,38 @@ function FailedJobsList() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['admin-failed-notification-jobs', filter],
+    queryKey: queryKeys.admin.notificationJobs.list(filter as Record<string, unknown>),
     queryFn: () => adminApi.getFailedNotificationJobs(filter),
-    staleTime: 30000, // 30 seconds
+    staleTime: 30000,
   });
 
   const replayMutation = useMutation({
     mutationFn: (jobId: string) => adminApi.replayFailedNotificationJob(jobId),
     onMutate: async (jobId) => {
-      // Optimistically add to pending set
       setPendingReplays((prev) => new Set(prev).add(jobId));
 
-      // Cancel outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['admin-failed-notification-jobs'] });
+      await queryClient.cancelQueries({ queryKey: queryKeys.admin.notificationJobs.all() });
 
-      // Snapshot previous value
-      const previousData = queryClient.getQueryData(['admin-failed-notification-jobs', filter]);
+      const previousData = queryClient.getQueryData(
+        queryKeys.admin.notificationJobs.list(filter as Record<string, unknown>)
+      );
 
-      // Optimistically update the job in the list
-      queryClient.setQueryData(['admin-failed-notification-jobs', filter], (old: any) => {
-        if (!old) return old;
-        return {
-          ...old,
-          jobs: old.jobs.map((job: FailedNotificationJob) =>
-            job.id === jobId ? { ...job, _replaying: true } : job
-          ),
-        };
-      });
+      queryClient.setQueryData(
+        queryKeys.admin.notificationJobs.list(filter as Record<string, unknown>),
+        (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            jobs: old.jobs.map((job: FailedNotificationJob) =>
+              job.id === jobId ? { ...job, _replaying: true } : job
+            ),
+          };
+        }
+      );
 
       return { previousData };
     },
-    onSuccess: (data, jobId) => {
+    onSuccess: (_data, jobId) => {
       // Remove from pending set
       setPendingReplays((prev) => {
         const newSet = new Set(prev);
@@ -109,9 +118,11 @@ function FailedJobsList() {
         return newSet;
       });
 
-      // Rollback optimistic update
       if (context?.previousData) {
-        queryClient.setQueryData(['admin-failed-notification-jobs', filter], context.previousData);
+        queryClient.setQueryData(
+          queryKeys.admin.notificationJobs.list(filter as Record<string, unknown>),
+          context.previousData
+        );
       }
 
       console.error('Failed to replay job:', error);
@@ -123,26 +134,16 @@ function FailedJobsList() {
     if (pendingReplays.has(jobId)) {
       return;
     }
-    setReplayingJobId(jobId);
-    setConfirmDialogOpen(true);
-  }, [pendingReplays]);
-
-  const handleConfirmReplay = useCallback(() => {
-    if (replayingJobId) {
-      replayMutation.mutate(replayingJobId);
-      setConfirmDialogOpen(false);
-      setReplayingJobId(null);
-    }
-  }, [replayingJobId, replayMutation]);
-
-  const handleCancelReplay = useCallback(() => {
-    setReplayingJobId(null);
-    setConfirmDialogOpen(false);
-  }, []);
-
-  const handleFilterChange = useCallback(() => {
-    setPage(1); // Reset to first page when filters change
-  }, []);
+    openConfirmation({
+      title: 'Replay Failed Job',
+      description:
+        'Are you sure you want to replay this failed notification job? This will attempt to resend the notification.',
+      confirmLabel: 'Replay',
+      action: () => replayMutation.mutateAsync(jobId),
+      successMessage: 'Failed notification job replay queued.',
+      errorMessage: 'Failed to replay notification job.',
+    });
+  }, [openConfirmation, pendingReplays, replayMutation]);
 
   const totalPages = data ? Math.ceil(data.total / (filter.limit || 20)) : 0;
 
@@ -181,14 +182,14 @@ function FailedJobsList() {
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label htmlFor="dlq-status" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Status
             </label>
             <select
+              id="dlq-status"
               value={statusFilter}
               onChange={(e) => {
                 setStatusFilter(e.target.value as 'failed' | 'all');
-                handleFilterChange();
               }}
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white dark:border-gray-600"
             >
@@ -198,47 +199,47 @@ function FailedJobsList() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label htmlFor="dlq-start-date" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Start Date
             </label>
             <input
+              id="dlq-start-date"
               type="date"
               value={startDate}
               onChange={(e) => {
                 setStartDate(e.target.value);
-                handleFilterChange();
               }}
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white dark:border-gray-600"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label htmlFor="dlq-end-date" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               End Date
             </label>
             <input
+              id="dlq-end-date"
               type="date"
               value={endDate}
               onChange={(e) => {
                 setEndDate(e.target.value);
-                handleFilterChange();
               }}
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white dark:border-gray-600"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label htmlFor="dlq-min-retries" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Min Retries
             </label>
             <input
+              id="dlq-min-retries"
               type="number"
               min="0"
               value={minRetries ?? ''}
               onChange={(e) => {
                 const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
                 setMinRetries(val);
-                handleFilterChange();
               }}
               placeholder="Any"
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white dark:border-gray-600"
@@ -298,7 +299,7 @@ function FailedJobsList() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Failed At
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider sticky right-0 bg-gray-50 dark:bg-gray-700 after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-gray-200 dark:after:bg-gray-600">
                     Actions
                   </th>
                 </tr>
@@ -341,7 +342,7 @@ function FailedJobsList() {
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                         {job.failedAt ? formatDate(job.failedAt) : 'N/A'}
                       </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium sticky right-0 bg-white dark:bg-gray-800 after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-gray-200 dark:after:bg-gray-700">
                         <button
                           onClick={() => handleReplayClick(job.id)}
                           disabled={isReplaying}
@@ -368,7 +369,7 @@ function FailedJobsList() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              onClick={() => setPage(Math.max(1, page - 1))}
               disabled={page === 1}
               className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -378,7 +379,7 @@ function FailedJobsList() {
               Page {page} of {totalPages}
             </span>
             <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => setPage(Math.min(totalPages, page + 1))}
               disabled={page === totalPages}
               className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -388,18 +389,7 @@ function FailedJobsList() {
         </div>
       )}
 
-      {/* Confirm Dialog */}
-      <ConfirmDialog
-        open={confirmDialogOpen}
-        onOpenChange={setConfirmDialogOpen}
-        title="Replay Failed Job"
-        description="Are you sure you want to replay this failed notification job? This will attempt to resend the notification."
-        confirmLabel="Replay"
-        cancelLabel="Cancel"
-        onConfirm={handleConfirmReplay}
-        onCancel={handleCancelReplay}
-        loading={replayMutation.isPending}
-      />
+      {confirmDialog}
     </>
   );
 }

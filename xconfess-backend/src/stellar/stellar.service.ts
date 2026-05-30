@@ -4,6 +4,9 @@ import * as StellarSDK from '@stellar/stellar-sdk';
 import { StellarConfigService } from './stellar-config.service';
 import { TransactionBuilderService } from './transaction-builder.service';
 import { ITransactionResult } from './interfaces/stellar-config.interface';
+import { AppException } from '../common/errors/app-exception';
+import { ErrorCode } from '../common/errors/error-codes';
+import { HttpStatus } from '@nestjs/common';
 import * as crypto from 'crypto';
 
 export interface AnchorData {
@@ -58,7 +61,11 @@ export class StellarService {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to get account balance: ${message}`);
-      throw new Error(`Account not found or network error: ${message}`);
+      throw new AppException(
+        `Account not found or network error: ${message}`,
+        ErrorCode.STELLAR_ERROR,
+        HttpStatus.NOT_FOUND,
+      );
     }
   }
 
@@ -80,7 +87,11 @@ export class StellarService {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Transaction verification failed: ${message}`);
-      throw new Error(`Transaction not found: ${message}`);
+      throw new AppException(
+        `Transaction not found: ${message}`,
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
     }
   }
 
@@ -121,7 +132,10 @@ export class StellarService {
     try {
       const serverSecret = this.configService.get('STELLAR_SERVER_SECRET');
       if (!serverSecret) {
-        throw new Error('Server secret key not configured');
+        throw new AppException(
+          'Server secret key not configured',
+          ErrorCode.INTERNAL_SERVER_ERROR,
+        );
       }
       const serverKeypair = StellarSDK.Keypair.fromSecret(serverSecret);
       const tx = await this.txBuilder.buildPaymentTransaction(

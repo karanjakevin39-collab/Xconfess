@@ -13,9 +13,9 @@ The ReputationBadges contract manages user reputation scores and achievement bad
 
 | Role | Capabilities | Actions |
 |------|--------------|---------|
-| **Admin** | Full contract management | `initialize`, `transfer_admin`, `create_badge`, `award_badge`, `adjust_reputation` |
-| **User** | Self-service minting | `mint_badge`, `transfer_badge`, `revoke_badge`, read operations |
-| **Public** | Read-only access | `get_badges`, `has_badge`, `get_user_reputation`, `get_badge_count`, `get_total_badges` |
+| **Admin** | Full contract management | `initialize`, `transfer_admin`, `create_badge`, `award_badge`, `adjust_reputation`, `recalibrate_epoch` |
+| **User** | Self-service minting | `mint_badge`, `transfer_badge`, `revoke_badge`, read operations, `apply_decay` |
+| **Public** | Read-only access | `get_badges`, `has_badge`, `get_user_reputation`, `get_badge_count`, `get_total_badges`, `apply_decay` |
 
 ### Authorization Rules
 
@@ -61,6 +61,22 @@ The ReputationBadges contract manages user reputation scores and achievement bad
   - Effect: Adds or subtracts reputation from user
   - Use case: Manual adjustments for community management or corrections
   - Negative amounts reduce reputation; positive increases it
+  - Also resets the user's decay timer (reputation considered "fresh"
+
+- **`apply_decay(user: Address)`**
+  - Caller: Public (anyone can call for any user)
+  - Effect: Explicitly applies pending reputation decay for a user
+  - Gas-efficient operation for updating stale reputation scores
+  - Returns the new reputation after decay is applied
+  - Updates the user's last update timestamp to prevent re-application
+
+- **`recalibrate_epoch(user_batch: Vec<Address>)`**
+  - Caller: Admin only
+  - Effect: Batch process reputation decay for multiple users
+  - Bounded operation: processes only the provided batch of users
+  - Increments the global epoch counter
+  - Returns the number of users whose reputation was updated
+  - Use case: Periodic maintenance to keep reputation scores fresh
 
 - **Read Operations** (no auth required)
   - `get_admin()` - Returns current admin address
@@ -70,6 +86,9 @@ The ReputationBadges contract manages user reputation scores and achievement bad
   - `get_badge_count(owner)` - Returns count of badges owned
   - `get_badge(badge_id)` - Returns badge by ID
   - `get_total_badges()` - Returns total badges minted
+  - `get_badge_type_metadata(badge_type)` - Returns display metadata (`BadgeTypeMetadata`) for a badge type, or `None` if not yet defined
+  - `has_badge_type_metadata(badge_type)` - Returns `true` if an admin has defined metadata for the badge type
+  - `get_user_badge_summary(user)` - Returns `(Vec<u64>, i128)` — badge IDs and reputation score in one call for efficient off-chain queries
 
 ## Badge Types
 
@@ -95,16 +114,66 @@ Badge metadata (name, description, criteria) is stored separately and managed by
 - **Default**: 0 at account creation
 - **Purpose**: Track user standing and facilitate community management decisions
 - **Range**: -9,223,372,036,854,775,808 to +9,223,372,036,854,775,807
+- **Decay Policy**: Time-based exponential decay to prevent stale reputation scores
+
+### Reputation Decay Policy
+
+Reputation scores decay over time to ensure they reflect recent activity rather than permanent historical actions.
+
+#### Decay Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Epoch Duration** | 604,800 seconds (7 days) | Time window for one decay cycle |
+| **Decay Rate** | 5% per epoch (0.95 multiplier) | Reputation retains 95% per epoch |
+| **Decay Floor** | 0 (for positive reputation) | Reputation won't decay below 0 for positive scores |
+| **Max Epochs per Calculation** | 52 (1 year) | Bounds gas costs for decay calculation |
+| **Negative Reputation** | Also decays | Negative scores become less negative over time (decay toward 0) |
+
+#### Decay Formula
+
+```
+reputation_after_decay = floor(reputation × 0.95^epochs_elapsed)
+```
+
+Where:
+- `epochs_elapsed = floor(time_since_last_update / EPOCH_DURATION)`
+- Maximum of 52 epochs applied in a single calculation (gas bounding)
+- For positive reputation, decay stops at 0 (floor)
+- For negative reputation, decay reduces the magnitude (moves toward 0)
+
+#### Decay Trigger Conditions
+
+Reputation decay is applied automatically when:
+1. `get_user_reputation()` is called - decay is applied before returning the value
+2. `apply_decay()` is called explicitly - anyone can trigger this for any user
+3. `recalibrate_epoch()` is called by admin - batch processing for multiple users
+
+#### Timer Reset
+
+The decay timer is reset (last update timestamp updated to current time) when:
+1. `adjust_reputation()` is called by admin - reputation change resets the timer
+2. `apply_decay()` successfully applies decay - timestamp updated to prevent re-application
 
 ### Reputation Adjustments
 
 Admins can adjust reputation for:
+
 - **Corrections**: Fixing miscalculated or missing adjustments
 - **Penalties**: Reducing reputation for policy violations
 - **Rewards**: Bonus reputation for exceptional community contributions
 - **Off-chain Events**: Adjustments based on external systems (e.g., verified donations)
 
 All reputation adjustments emit events with the reason recorded on-chain.
+
+### Reputation Decay Events
+
+When decay is applied, a `reputation_decayed` event is emitted with:
+- `user`: The address whose reputation was decayed
+- `old_reputation`: Reputation before decay
+- `new_reputation`: Reputation after decay
+- `epochs_applied`: Number of epochs that were applied
+- `timestamp`: When the decay was applied
 
 ## Event Receipts
 
@@ -120,6 +189,8 @@ The contract emits events for all state-changing operations:
 | `badge_transferred` | `(topic, badge_id)` | BadgeTransferredData | On transfer_badge |
 | `badge_revoked` | `(topic, owner)` | BadgeEvent | On revoke_badge |
 | `reputation_adjusted` | `(topic, user)` | ReputationAdjustedData | On adjust_reputation |
+| `reputation_decayed` | `(topic, user)` | ReputationDecayedData | On apply_decay |
+| `epoch_recalibrated` | `(topic, admin)` | `(epoch, updated_count)` | On recalibrate_epoch |
 
 ## Storage Layout
 
@@ -132,6 +203,8 @@ The contract emits events for all state-changing operations:
 | `TypeOwnership(user, type)` | bool | Has user ever owned this badge type |
 | `BadgeTypeMetadata(type)` | BadgeTypeMetadata | Display info for badge type |
 | `UserReputation(user)` | i128 | User's current reputation score |
+| `ReputationLastUpdate(user)` | u64 | Timestamp of last reputation update (for decay) |
+| `CurrentEpoch` | u32 | Global epoch index for recalibration |
 
 ## Error Codes
 
@@ -215,6 +288,57 @@ admin_contract.adjust_reputation(
 )?;
 ```
 
+### Workflow 6: Reputation Decay (Automatic)
+
+```rust
+// When querying reputation, decay is automatically applied
+// No explicit action needed - the contract handles it
+let current_rep = contract.get_user_reputation(&user_address);
+// If epochs have passed, the returned value will reflect decayed reputation
+```
+
+### Workflow 7: Explicit Decay Application
+
+```rust
+// Anyone can trigger decay for a user (gas-efficient)
+// Useful for keeping reputation scores fresh
+let updated_rep = contract.apply_decay(&user_address);
+// Returns the new reputation after decay is applied
+```
+
+### Workflow 8: Batch Epoch Recalibration (Admin)
+
+```rust
+// Admin performs periodic maintenance to recalibrate reputations
+let mut user_batch = Vec::new(&env);
+user_batch.push_back(user1);
+user_batch.push_back(user2);
+user_batch.push_back(user3);
+
+// Process batch - applies decay and increments global epoch
+let updated_count = admin_contract.recalibrate_epoch(&user_batch)?;
+// Returns number of users whose reputation was updated
+```
+
+### Workflow 9: Reputation Decay Over Time
+
+```rust
+// Initial reputation set by admin
+admin_contract.adjust_reputation(&user, 1000, "initial")?;
+// User reputation: 1000
+
+// After 1 epoch (7 days): reputation decays by 5%
+// 1000 * 0.95 = 950
+let rep_after_1_epoch = contract.get_user_reputation(&user);
+// rep_after_1_epoch = 950
+
+// After 2 more epochs (21 days total): another 5% decay applied twice
+// 950 * 0.95 = 902 (after epoch 2)
+// 902 * 0.95 = 856 (after epoch 3)
+let rep_after_3_epochs = contract.get_user_reputation(&user);
+// rep_after_3_epochs = 856
+```
+
 ## Security Considerations
 
 1. **Initialization Check**: Contract must be initialized before any admin functions work
@@ -225,8 +349,9 @@ admin_contract.adjust_reputation(
 
 ## Testing
 
-All authorization rules are tested in `contracts/reputation-badges/src/test.rs`:
+All authorization rules and decay functionality are tested in `contracts/reputation-badges/src/test.rs`:
 
+### Authorization Tests
 - `test_initialize_contract` - Initialization flow
 - `test_initialize_only_once` - Prevents re-initialization
 - `test_transfer_admin` - Admin transfer authorization
@@ -237,6 +362,19 @@ All authorization rules are tested in `contracts/reputation-badges/src/test.rs`:
 - `test_award_duplicate_badge_fails` - Duplicate prevention
 - `test_admin_can_award_different_badge_types` - Multiple badge types
 - `test_mint_and_award_can_coexist` - Self-mint + admin-award compatibility
+
+### Reputation Decay Tests
+- `test_reputation_decay_basic` - Basic decay over 1 epoch (5% reduction)
+- `test_reputation_decay_zero_epochs` - No decay when no time passed
+- `test_reputation_decay_multiple_epochs` - Decay over 3 epochs
+- `test_reputation_decay_floor` - Reputation decays to 0 (floor test)
+- `test_reputation_decay_negative` - Negative reputation also decays (toward 0)
+- `test_apply_decay_explicit` - Explicit `apply_decay` function
+- `test_adjust_reputation_resets_timer` - Adjusting reputation resets decay timer
+- `test_reputation_decay_bounded` - Gas-bounded calculation (max 52 epochs)
+- `test_recalibrate_epoch` - Admin batch epoch recalibration
+- `test_reputation_decay_fairness_multiple_users` - Proportional decay for multiple users
+- `test_reputation_no_decay_when_active` - No decay if less than 1 epoch passed
 
 ## Integration Points
 

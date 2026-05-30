@@ -4,68 +4,46 @@ import {
   ArgumentsHost,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { ErrorCode } from '../errors/error-codes';
+import { AppException } from '../errors/app-exception';
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
   catch(exception: HttpException, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
     const status = exception.getStatus();
-    const exceptionResponse = exception.getResponse();
 
-    let message = 'An unexpected error occurred';
-    let code = this.getErrorCode(status);
+    const appException = AppException.fromHttpException(exception);
+    const exceptionResponse = appException.getResponse() as any;
 
-    if (typeof exceptionResponse === 'string') {
-      message = exceptionResponse;
-    } else if (
-      typeof exceptionResponse === 'object' &&
-      exceptionResponse !== null
-    ) {
-      const resObj = exceptionResponse as Record<string, any>;
-
-      // Handle validation errors (arrays) from ValidationPipe
-      if (Array.isArray(resObj.message)) {
-        message = resObj.message[0];
-      } else if (resObj.message) {
-        message = resObj.message;
-      }
-
-      if (resObj.code) {
-        code = resObj.code;
-      }
-    }
-
-    response.status(status).json({
+    const errorResponse = {
       status,
-      message,
-      code,
+      code: exceptionResponse.code || ErrorCode.INTERNAL_SERVER_ERROR,
+      message: exceptionResponse.message || 'An unexpected error occurred',
+      details: exceptionResponse.details,
       timestamp: new Date().toISOString(),
+      path: request.url,
       requestId: (request as any).requestId || 'unknown',
-    });
-  }
+    };
 
-  private getErrorCode(status: number): string {
-    switch (status) {
-      case HttpStatus.BAD_REQUEST:
-        return 'BAD_REQUEST';
-      case HttpStatus.UNAUTHORIZED:
-        return 'UNAUTHORIZED';
-      case HttpStatus.FORBIDDEN:
-        return 'FORBIDDEN';
-      case HttpStatus.NOT_FOUND:
-        return 'NOT_FOUND';
-      case HttpStatus.CONFLICT:
-        return 'CONFLICT';
-      case HttpStatus.TOO_MANY_REQUESTS:
-        return 'THROTTLED';
-      case HttpStatus.INTERNAL_SERVER_ERROR:
-        return 'INTERNAL_SERVER_ERROR';
-      default:
-        return 'ERROR';
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      this.logger.error(
+        `${request.method} ${request.url} - ${status} [${errorResponse.code}]: ${errorResponse.message}`,
+        exception.stack,
+      );
+    } else {
+      this.logger.warn(
+        `${request.method} ${request.url} - ${status} [${errorResponse.code}]: ${errorResponse.message}`,
+      );
     }
+
+    response.status(status).json(errorResponse);
   }
 }

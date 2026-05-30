@@ -130,7 +130,7 @@ interface FailedJobsFilter {
 
 ### Test Coverage
 - **Page Component**: 100% coverage of rendering, filtering, pagination, and replay actions
-- **API Client**: Full coverage of API methods with mock and real modes
+- **API Client**: Full coverage of API methods against the shared runtime client
 - **useDebounce Hook**: Comprehensive hook behavior testing
 - **Error Handling**: All error scenarios covered
 
@@ -185,7 +185,7 @@ Filters are debounced by 500ms to reduce API calls.
 
 ### Replay Errors
 - Rolls back optimistic updates
-- Logs error to console
+- Surfaces failure feedback in the shared toast system
 - Prevents duplicate replay attempts
 
 ### Empty States
@@ -208,22 +208,12 @@ Filters are debounced by 500ms to reduce API calls.
 4. **Pagination**: Loads only necessary data
 5. **Memoization**: Filters are memoized to prevent unnecessary re-renders
 
-## Mock Mode
+## Development Notes
 
-The page supports mock mode for development and testing:
-
-```typescript
-// Enable mock mode
-localStorage.setItem('adminMock', 'true');
-
-// Or set environment variable
-NEXT_PUBLIC_ADMIN_MOCK=true
-```
-
-In mock mode:
-- API calls are intercepted and return mock data
-- No real backend requests are made
-- Useful for frontend development and testing
+This page now uses the shared runtime admin API client only:
+- No browser `localStorage` mock toggles
+- No legacy mock-admin fallback branch
+- Frontend tests should mock `apiClient` directly
 
 ## Future Enhancements
 

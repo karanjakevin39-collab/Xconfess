@@ -47,7 +47,22 @@ export class ConfessionController {
 
   @Post()
   @ApiOperation({ summary: 'Create a new anonymous confession' })
-  @ApiResponse({ status: 201, description: 'Confession created successfully' })
+  @ApiBody({ type: CreateConfessionDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Confession created successfully.',
+    schema: {
+      example: {
+        id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+        message: 'I secretly enjoy watching reality TV shows.',
+        gender: 'male',
+        tags: ['humor'],
+        view_count: 0,
+        created_at: '2026-04-25T10:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Validation error — message exceeds 1000 chars or invalid enum.' })
   @UsePipes(new ValidationPipe({ whitelist: true }))
   create(@Body() dto: CreateConfessionDto) {
     // Only allow canonical contract
@@ -56,6 +71,26 @@ export class ConfessionController {
 
   @Get()
   @ApiOperation({ summary: 'Get paginated confessions list' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of confessions.',
+    schema: {
+      example: {
+        data: [
+          {
+            id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+            message: 'I secretly enjoy watching reality TV shows.',
+            gender: 'male',
+            view_count: 12,
+            created_at: '2026-04-25T10:00:00.000Z',
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 20,
+      },
+    },
+  })
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   findAll(@Query() dto: GetConfessionsDto) {
     return this.service.getConfessions(dto);
@@ -67,7 +102,7 @@ export class ConfessionController {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async search(@Query() dto: SearchConfessionDto, @Req() req: any) {
     const result = await this.service.search(dto);
-    if (req.user) {
+    if (req.user && req.user.id) {
       await this.searchDiscoveryService.recordSearch(req.user.id, dto);
     }
     return result;
@@ -79,7 +114,7 @@ export class ConfessionController {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async fullTextSearch(@Query() dto: SearchConfessionDto, @Req() req: any) {
     const result = await this.service.fullTextSearch(dto);
-    if (req.user) {
+    if (req.user && req.user.id) {
       await this.searchDiscoveryService.recordSearch(req.user.id, dto);
     }
     return result;
@@ -162,6 +197,21 @@ export class ConfessionController {
     summary: 'Get a single confession by ID (increments view count)',
   })
   @ApiParam({ name: 'id', description: 'Confession UUID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Confession found.',
+    schema: {
+      example: {
+        id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+        message: 'I secretly enjoy watching reality TV shows.',
+        gender: 'male',
+        view_count: 13,
+        tags: ['humor'],
+        created_at: '2026-04-25T10:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Confession not found.' })
   getById(@Param('id') id: string, @Req() req: Request) {
     return this.service.getConfessionByIdWithViewCount(id, req);
   }

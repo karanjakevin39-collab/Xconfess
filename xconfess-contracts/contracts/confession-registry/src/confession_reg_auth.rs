@@ -41,14 +41,14 @@
 
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
-use crate::{ConfessionRegistry, ConfessionRegistryClient, ConfessionStatus};
+use crate::{ConfessionRegistry, ConfessionRegistryClient, ConfessionStatus, ReplayError};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn setup() -> (Env, ConfessionRegistryClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, ConfessionRegistry);
+    let contract_id = env.register(ConfessionRegistry, ());
     let client = ConfessionRegistryClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -146,7 +146,7 @@ fn a4_double_delete_is_rejected() {
 #[test]
 #[should_panic(expected = "confession not found")]
 fn a5_delete_nonexistent_confession_panics() {
-    let (env, client, _admin, author) = setup();
+    let (_env, client, _admin, author) = setup();
     client.delete_confession(&author, &9_999, &1_000_000);
 }
 
@@ -209,7 +209,7 @@ fn b4_cannot_update_deleted_confession() {
 #[test]
 #[should_panic(expected = "confession not found")]
 fn b5_update_nonexistent_confession_panics() {
-    let (env, client, _admin, author) = setup();
+    let (_env, client, _admin, author) = setup();
     client.update_status(&author, &9_999, &ConfessionStatus::Flagged, &1_000_000);
 }
 
@@ -442,4 +442,38 @@ fn f5_author_index_unchanged_by_status_changes() {
         ids.iter().any(|x| x == id2),
         "id2 must remain in author index after delete"
     );
+}
+
+/// G1: sequenced operations reject replayed nonce values.
+#[test]
+fn g1_replay_attempt_with_duplicate_nonce_is_rejected() {
+    let (env, client, _admin, author) = setup();
+    let id = create(&client, &env, &author, 100);
+
+    assert_eq!(client.get_expected_nonce(&author), 1);
+    assert_eq!(
+        client.update_status_seq(&author, &id, &ConfessionStatus::Flagged, &2_000_000, &1),
+        ()
+    );
+    assert_eq!(client.get_expected_nonce(&author), 2);
+
+    let replay =
+        client.try_update_status_seq(&author, &id, &ConfessionStatus::Active, &3_000_000, &1);
+    assert_eq!(replay, Err(Ok(ReplayError::InvalidNonce)));
+}
+
+/// G2: stale nonce values are rejected after a successful sequenced mutation.
+#[test]
+fn g2_stale_nonce_is_rejected_for_delete() {
+    let (env, client, _admin, author) = setup();
+    let id = create(&client, &env, &author, 101);
+
+    assert_eq!(client.get_expected_nonce(&author), 1);
+    client.update_status_seq(&author, &id, &ConfessionStatus::Flagged, &2_000_000, &1);
+
+    let stale_delete = client.try_delete_confession_seq(&author, &id, &3_000_000, &1);
+    assert_eq!(stale_delete, Err(Ok(ReplayError::InvalidNonce)));
+
+    client.delete_confession_seq(&author, &id, &4_000_000, &2);
+    assert_eq!(client.get_confession(&id).status, ConfessionStatus::Deleted);
 }

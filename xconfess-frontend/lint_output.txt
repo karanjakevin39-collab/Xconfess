@@ -36,22 +36,9 @@
 /home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/common/RetryButton.tsx
   4:8  warning  'LoadingSpinner' is defined but never used  @typescript-eslint/no-unused-vars
 
-/home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/confession/AnchorButton.tsx
-  11:3  warning  'AlertCircle' is defined but never used  @typescript-eslint/no-unused-vars
-
-/home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/confession/CommentSection.tsx
-  58:5  warning  React Hook useCallback has a missing dependency: 'loading'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
-
 /home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/confession/ReactionButtons.tsx
   61:14  warning  'err' is defined but never used            @typescript-eslint/no-unused-vars
   68:9   warning  'Icon' is assigned a value but never used  @typescript-eslint/no-unused-vars
-
-/home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/confession/TipButton.tsx
-  36:11  warning  'publicKey' is assigned a value but never used       @typescript-eslint/no-unused-vars
-  36:44  warning  'readinessError' is assigned a value but never used  @typescript-eslint/no-unused-vars
-
-/home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/onboarding/OnboardingFlow.tsx
-  29:9  warning  'startTourWhenReady' is assigned a value but never used  @typescript-eslint/no-unused-vars
 
 /home/abujulaybeeb/Documents/Drips 4/Xconfess/xconfess-frontend/app/components/profile/ProfileHeader.tsx
   9:7  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
@@ -171,7 +158,7 @@ This API returns functions which cannot be memoized without leading to stale UI.
   40:5  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
   56:5  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
 
-✖ 71 problems (1 error, 70 warnings)
+✖ 66 problems (1 error, 65 warnings)
   0 errors and 8 warnings potentially fixable with the `--fix` option.
 
 npm error Lifecycle script `lint` failed with error:

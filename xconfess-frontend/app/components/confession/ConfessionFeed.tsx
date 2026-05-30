@@ -1,117 +1,190 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { ConfessionCard } from "./ConfessionCard";
-import { SkeletonCard } from "./LoadingSkeleton";
-import {
-  normalizeConfession,
-  type NormalizedConfession,
-} from "../../lib/utils/normalizeConfession";
-import { useConfessions } from "../../lib/hooks/useConfessions";
+import { ConfessionFeedSkeleton } from "./LoadingSkeleton";
+import { useConfessionsQuery } from "../../lib/hooks/useConfessionsQuery";
+import { usePaginationState } from "../../lib/hooks/usePaginationState";
 import ErrorState from "../common/ErrorState";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 export const ConfessionFeed = () => {
-  const observerTarget = useRef<HTMLDivElement>(null);
-  const { data, fetchNextPage, hasMore, loading, error, setPage } =
-    useConfessions();
+  const { page, setPage, limit } = usePaginationState();
 
-  const confessions: NormalizedConfession[] =
-    data?.map((c) => normalizeConfession(c)) ?? [];
+  const { data, isLoading, isFetching, error, refetch } = useConfessionsQuery({
+    page,
+    limit,
+  });
 
-  const isEmpty = !loading && confessions.length === 0;
-
-  // IntersectionObserver for infinite scroll
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const [entry] = entries;
-        if (entry.isIntersecting && hasMore && !loading) {
-          fetchNextPage();
-        }
-      },
-      { rootMargin: "100px", threshold: 0.1 },
-    );
-
-    const target = observerTarget.current;
-    if (target) observer.observe(target);
-    return () => {
-      if (target) observer.unobserve(target);
-    };
-  }, [hasMore, loading, fetchNextPage]);
+  const confessions = data?.confessions ?? [];
+  const totalPages = data?.total
+    ? Math.ceil(data.total / limit)
+    : data?.hasMore
+      ? page + 1
+      : page;
+  const isEmpty = !isLoading && confessions.length === 0;
 
   // Retry handler
-  const handleRetry = () => setPage(1); // reload first page
+  const handleRetry = () => {
+    void refetch();
+  };
 
-  // Loading skeletons
-  const renderLoadingSkeletons = () =>
-    Array.from({ length: 3 }).map((_, idx) => (
-      <SkeletonCard key={`skeleton-${idx}`} />
-    ));
+  const scrollToComposer = () => {
+    document.getElementById("composer")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
+
+  // Render pagination items
+  const renderPaginationItems = () => {
+    const items = [];
+    const maxVisible = 5;
+
+    let startPage = Math.max(1, page - 2);
+    const endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+    if (endPage - startPage < maxVisible - 1) {
+      startPage = Math.max(1, endPage - maxVisible + 1);
+    }
+
+    if (startPage > 1) {
+      items.push(
+        <PaginationItem key="1">
+          <PaginationLink onClick={() => setPage(1)}>1</PaginationLink>
+        </PaginationItem>,
+      );
+      if (startPage > 2) {
+        items.push(<PaginationEllipsis key="ellipsis-start" />);
+      }
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      items.push(
+        <PaginationItem key={i}>
+          <PaginationLink isActive={i === page} onClick={() => setPage(i)}>
+            {i}
+          </PaginationLink>
+        </PaginationItem>,
+      );
+    }
+
+    if (endPage < totalPages) {
+      if (endPage < totalPages - 1) {
+        items.push(<PaginationEllipsis key="ellipsis-end" />);
+      }
+      items.push(
+        <PaginationItem key={totalPages}>
+          <PaginationLink onClick={() => setPage(totalPages)}>
+            {totalPages}
+          </PaginationLink>
+        </PaginationItem>,
+      );
+    }
+
+    return items;
+  };
 
   return (
-    <div className="w-full max-w-2xl mx-auto px-4 py-8">
-      {/* Empty State */}
-      {isEmpty && (
-        <div className="text-center py-12">
-          <p className="text-gray-400 text-lg mb-4">
-            No confessions yet. Be the first to share!
-          </p>
-          <button
-            onClick={handleRetry}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
-      )}
-
-      {/* Error State */}
-      {error && (
-        <ErrorState
-          error={error.message ?? "Failed to load confessions"}
-          correlationId={error.correlationId}
-          title="Failed to load confessions"
-          description="Something went wrong while fetching confessions."
-          showRetry
-          onRetry={handleRetry}
-        />
-      )}
-
-      {/* Confessions Grid */}
-      {!isEmpty && (
-        <div className="space-y-4">
-          {confessions.map((confession) => (
-            <ConfessionCard key={confession.id} confession={confession} />
-          ))}
-
-          {/* Loading skeletons while fetching more */}
-          {loading && renderLoadingSkeletons()}
-        </div>
-      )}
-
-      {/* Infinite scroll trigger */}
-      {hasMore && (
-        <div
-          ref={observerTarget}
-          className="h-10 flex items-center justify-center mt-8"
-          aria-label="Loading more confessions"
-        >
-          {loading && (
-            <div className="flex items-center gap-2 text-gray-400">
-              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100" />
-              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200" />
+    <div className="mx-auto w-full max-w-3xl py-2">
+      {/* Reserve vertical space to avoid layout shifts between states */}
+      <div className="min-h-[320px] sm:min-h-[420px] md:min-h-[520px]">
+        {/* Empty State */}
+        {isEmpty && (
+          <div className="luxury-panel rounded-[30px] p-8 text-center">
+            <p className="mb-3 font-editorial text-3xl sm:text-4xl text-[var(--foreground)]">
+              No confessions yet.
+            </p>
+            <p className="mb-4 max-w-xl mx-auto text-sm leading-7 text-[var(--secondary)]">
+              Be the first to set the tone for the community — share something
+              thoughtful, kind, and true. Your first post helps others
+              understand what belongs here.
+            </p>
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+              <button
+                onClick={() => scrollToComposer()}
+                className="rounded-full bg-[linear-gradient(135deg,var(--primary),var(--primary-deep))] px-5 py-2.5 text-sm font-medium text-white shadow-[0_18px_40px_-22px_rgba(143,109,60,0.85)] transition-colors hover:brightness-105"
+              >
+                Begin writing
+              </button>
+              <button
+                onClick={handleRetry}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-5 py-2.5 text-sm font-medium text-[var(--secondary)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--foreground)]"
+              >
+                Refresh
+              </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* End of feed message */}
-      {!hasMore && confessions.length > 0 && (
-        <div className="text-center py-8">
-          <p className="text-gray-500">
-            You&apos;ve reached the end of confessions
-          </p>
+        {/* Error State (do not expose raw technical errors) */}
+        {error && (
+          <ErrorState
+            error={undefined}
+            title="Unable to load feed"
+            description="We couldn't load recent confessions. Please try again or check your connection."
+            showRetry
+            onRetry={handleRetry}
+          />
+        )}
+
+        {/* Loading state (skeleton kept inside the reserved space to avoid jumps) */}
+        {isLoading && <ConfessionFeedSkeleton />}
+
+        {/* Confessions Grid */}
+        {!isEmpty && confessions.length > 0 && (
+          <div
+            className={`space-y-5 transition-opacity duration-200 ${isFetching && !isLoading ? "opacity-50" : "opacity-100"}`}
+          >
+            {confessions.map((confession) => (
+              <ConfessionCard key={confession.id} confession={confession} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Pagination Controls */}
+      {!isEmpty && totalPages > 1 && (
+        <div className="mt-12 py-4">
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  onClick={() => page > 1 && setPage(page - 1)}
+                  aria-disabled={page <= 1}
+                  className={
+                    page <= 1
+                      ? "pointer-events-none opacity-50"
+                      : "cursor-pointer"
+                  }
+                />
+              </PaginationItem>
+
+              {renderPaginationItems()}
+
+              <PaginationItem>
+                <PaginationNext
+                  onClick={() => page < totalPages && setPage(page + 1)}
+                  aria-disabled={page >= totalPages}
+                  className={
+                    page >= totalPages
+                      ? "pointer-events-none opacity-50"
+                      : "cursor-pointer"
+                  }
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+          <div className="mt-4 text-center text-xs text-[var(--secondary)]">
+            Page {page} of {totalPages}
+          </div>
         </div>
       )}
     </div>

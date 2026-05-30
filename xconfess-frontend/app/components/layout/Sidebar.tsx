@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { X, LogOut, User, MessageSquare, Home, Search } from "lucide-react";
+import { X, LogOut, User, MessageSquare, Home, Search, BarChart3 } from "lucide-react";
 import { useAuth } from "../../lib/hooks/useAuth";
 import { useFocusTrap } from "@/app/lib/hooks/useFocusTrap";
 
@@ -68,11 +68,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           </div>
 
           <nav className="flex-1 overflow-y-auto py-4">
-            <ul className="space-y-1 px-2">
+            <ul className="space-y-2 px-2">
               <li>
                 <Link
                   href="/"
-                  className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors"
+                  className="flex items-center gap-3 px-4 py-4 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors min-h-[44px]"
                   onClick={onClose}
                 >
                   <Home size={20} />
@@ -82,7 +82,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               <li>
                 <Link
                   href="/search"
-                  className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-purple-50 hover:text-purple-600 rounded-lg transition-colors"
+                  className="flex items-center gap-3 px-4 py-4 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors min-h-[44px]"
                   onClick={onClose}
                 >
                   <Search size={20} />
@@ -91,8 +91,18 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               </li>
               <li>
                 <Link
-                  href="/profile"
+                  href="/compare"
                   className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors"
+                  onClick={onClose}
+                >
+                  <BarChart3 size={20} />
+                  <span>Compare</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/profile"
+                  className="flex items-center gap-3 px-4 py-4 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors min-h-[44px]"
                   onClick={onClose}
                 >
                   <User size={20} />
@@ -102,7 +112,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               <li>
                 <Link
                   href="/messages"
-                  className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors"
+                  className="flex items-center gap-3 px-4 py-4 text-gray-700 dark:text-slate-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 rounded-lg transition-colors min-h-[44px]"
                   onClick={onClose}
                 >
                   <MessageSquare size={20} />

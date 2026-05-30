@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from "react";
 import { useDrafts, Draft } from "@/app/lib/hooks/useDrafts";
 import { Button } from "@/app/components/ui/button";
 import { Modal } from "@/app/components/ui/modal";
+import { ConfirmDialog } from "@/app/components/admin/ConfirmDialog";
+import { useGlobalToast } from "@/app/components/common/Toast";
 import { Trash2, Clock, FileText } from "lucide-react";
 import { formatDate } from "@/app/lib/utils/formatDate";
 import { Gender } from "@/app/lib/utils/validation";
@@ -33,8 +35,10 @@ export const DraftManager: React.FC<DraftManagerProps> = ({
   } = useDrafts();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const [clearDraftsOpen, setClearDraftsOpen] = useState(false);
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedRef = useRef<string>("");
+  const toast = useGlobalToast();
 
   useEffect(() => {
     if (currentDraftId && !loadDraft(currentDraftId)) {
@@ -105,8 +109,25 @@ export const DraftManager: React.FC<DraftManagerProps> = ({
     }
   };
 
+  const handleClearDrafts = () => {
+    clearDrafts();
+    setCurrentDraftId(null);
+    setClearDraftsOpen(false);
+    toast.success("All drafts cleared.");
+  };
+
   return (
     <>
+      <ConfirmDialog
+        open={clearDraftsOpen}
+        onOpenChange={setClearDraftsOpen}
+        title="Clear all drafts?"
+        description="This will permanently remove every saved draft on this device."
+        confirmLabel="Clear drafts"
+        variant="danger"
+        onConfirm={handleClearDrafts}
+      />
+
       <Button
         variant="outline"
         size="sm"
@@ -184,12 +205,7 @@ export const DraftManager: React.FC<DraftManagerProps> = ({
                 <Button
                   variant="destructive"
                   size="sm"
-                  onClick={() => {
-                    if (confirm("Are you sure you want to clear all drafts?")) {
-                      clearDrafts();
-                      setCurrentDraftId(null);
-                    }
-                  }}
+                  onClick={() => setClearDraftsOpen(true)}
                 >
                   Clear All Drafts
                 </Button>

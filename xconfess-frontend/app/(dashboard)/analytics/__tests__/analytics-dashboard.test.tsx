@@ -19,7 +19,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 
-import AnalyticsPage from '../../(dashboard)/analytics/page';
+import AnalyticsPage from '../page';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Data Fixtures

@@ -1,13 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getQueueToken } from '@nestjs/bull';
-import { Job, Queue } from 'bull';
+import { getQueueToken } from '@nestjs/bullmq';
+import { Job, Queue } from 'bullmq';
 import {
   NotificationProcessor,
   NOTIFICATION_DLQ,
   NotificationJobData,
-} from './notification.processor';
-import { EmailNotificationService } from '../services/email-notification.service';
-import { NotificationType } from '../entities/notification.entity';
+} from './processors/notification.processor';
+import { EmailNotificationService } from './services/email-notification.service';
+import { NotificationType } from './entities/notification.entity';
+import { AppLogger } from '../logger/logger.service';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -17,13 +18,14 @@ function makeJob(
   return {
     id: 'job-1',
     timestamp: Date.now(),
-    data: {
+      data: {
       userId: 'user-uuid-123',
       type: NotificationType.NEW_MESSAGE,
       title: 'New message',
       message: 'You have a new confession',
       metadata: { senderId: 'sender-uuid' },
     },
+    name: 'send-notification',
     attemptsMade: 1,
     opts: { attempts: 5 },
     ...overrides,
@@ -51,6 +53,13 @@ describe('NotificationProcessor', () => {
           provide: getQueueToken(NOTIFICATION_DLQ),
           useValue: dlqMock,
         },
+        {
+          provide: AppLogger,
+          useValue: {
+            incrementCounter: jest.fn(),
+            observeTimer: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -62,7 +71,7 @@ describe('NotificationProcessor', () => {
 
   it('calls emailNotificationService.sendEmail with correct job data', async () => {
     const job = makeJob();
-    await processor.handleSendNotification(job);
+    await processor.process(job);
     expect(emailNotificationService.sendEmail).toHaveBeenCalledWith(job.data);
   });
 
@@ -71,7 +80,7 @@ describe('NotificationProcessor', () => {
       new Error('SMTP timeout'),
     );
     const job = makeJob();
-    await expect(processor.handleSendNotification(job)).rejects.toThrow(
+    await expect(processor.process(job)).rejects.toThrow(
       'SMTP timeout',
     );
   });

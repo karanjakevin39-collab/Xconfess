@@ -121,7 +121,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-950">
-      <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
+      <div className="max-w-4xl mx-auto px-4 py-10 sm:px-6 md:px-8 space-y-6">
         {/* ── Identity header ── */}
         <div className="flex items-center gap-4">
           <Avatar username={user.username} />

@@ -7,6 +7,7 @@ import {
   Query,
   UsePipes,
   ValidationPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -16,13 +17,10 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { MessagesService } from './messages.service';
-import {
-  CreateMessageDto,
-  GetMessagesQueryDto,
-  ReplyMessageDto,
-} from './dto/message.dto';
+import { CreateMessageDto, ReplyMessageDto } from './dto/message.dto';
+import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
+import { encodeCursor, CursorPaginatedResponseDto } from '../common/pagination';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { NotificationQueue } from '../notification/notification.queue';
 import { GetUser } from '../auth/get-user.decorator';
 import { User } from '../user/entities/user.entity';
 
@@ -30,10 +28,7 @@ import { User } from '../user/entities/user.entity';
 @ApiBearerAuth()
 @Controller('messages')
 export class MessagesController {
-  constructor(
-    private readonly messagesService: MessagesService,
-    private readonly notificationQueue: NotificationQueue,
-  ) {}
+  constructor(private readonly messagesService: MessagesService) {}
 
   @UseGuards(JwtAuthGuard)
   @Post()
@@ -68,8 +63,9 @@ export class MessagesController {
   @ApiOperation({
     summary: 'Get all message threads for the authenticated user',
   })
-  async getThreads(@GetUser() user: User) {
-    return this.messagesService.findAllThreadsForUser(user);
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async getThreads(@Query() query: GetMessagesQueryDto, @GetUser() user: User) {
+    return this.messagesService.findAllThreadsForUser(user, query);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -92,22 +88,31 @@ export class MessagesController {
     @Query() query: GetMessagesQueryDto,
     @GetUser() user: User,
   ) {
-    const messages = await this.messagesService.findForConfessionThread(
+    if (!query.confession_id || !query.sender_id) {
+      throw new BadRequestException('confession_id and sender_id are required');
+    }
+    const result = await this.messagesService.findForConfessionThread(
       query.confession_id,
       query.sender_id,
       user,
+      query,
     );
+
     // Hide sender info for anonymity
-    return {
-      messages: messages.map((m) => ({
-        id: m.id,
-        content: m.content,
-        createdAt: m.createdAt,
-        hasReply: m.hasReply,
-        replyContent: m.replyContent,
-        repliedAt: m.repliedAt,
-      })),
-      total: messages.length,
-    };
+    const transformedData = result.data.map((m) => ({
+      id: m.id,
+      content: m.content,
+      createdAt: m.createdAt,
+      hasReply: m.hasReply,
+      replyContent: m.replyContent,
+      repliedAt: m.repliedAt,
+    }));
+
+    return new CursorPaginatedResponseDto(
+      transformedData,
+      result.nextCursor,
+      result.hasMore,
+      query.limit || 20,
+    );
   }
 }

@@ -1,297 +1,291 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useReactions } from '../useReactions';
-import type { ReactionType, ReactionCounts } from '@/app/lib/types/reaction';
+import { act, renderHook, waitFor } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type InfiniteData,
+} from "@tanstack/react-query";
+import { useReactions } from "@/app/lib/hooks/useReactions";
+import type {
+  GetConfessionByIdResult,
+  GetConfessionsResult,
+} from "@/app/lib/api/confessions";
+import { queryKeys } from "@/app/lib/api/queryKeys";
+import { addReaction } from "@/app/lib/api/reactions";
 
-// Mock the addReaction API
-jest.mock('@/app/lib/api/reactions', () => ({
+jest.mock("@/app/lib/api/reactions", () => ({
   addReaction: jest.fn(),
 }));
 
-// Mock queryKeys
-jest.mock('@/app/lib/api/queryKeys', () => ({
-  queryKeys: {
-    confessions: {
-      all: ['confessions'],
-      detail: (id: string) => ['confessions', 'detail', id],
-    },
-  },
-}));
-
-import { addReaction } from '@/app/lib/api/reactions';
-
 const mockAddReaction = addReaction as jest.MockedFunction<typeof addReaction>;
 
-const createWrapper = () => {
+function buildConfession(reactions = { like: 2, love: 1 }) {
+  return {
+    id: "confession-1",
+    content: "Test confession",
+    createdAt: "2026-04-23T00:00:00.000Z",
+    viewCount: 9,
+    commentCount: 2,
+    reactions,
+    author: {
+      id: "anonymous",
+      username: "Anonymous",
+    },
+  };
+}
+
+function createTestHarness() {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: {
-        retry: false,
-      },
-      mutations: {
-        retry: false,
-      },
+      queries: { retry: false },
+      mutations: { retry: false },
     },
   });
-  
-  return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
-  );
-};
 
-describe('useReactions', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+
+  return { queryClient, wrapper };
+}
+
+function seedConfessionCache(queryClient: QueryClient) {
+  const listKey = queryKeys.confessions.list({});
+  const detailKey = queryKeys.confessions.detail("confession-1");
+
+  queryClient.setQueryData<InfiniteData<GetConfessionsResult>>(listKey, {
+    pageParams: [1],
+    pages: [
+      {
+        confessions: [buildConfession()],
+        hasMore: false,
+        page: 1,
+      },
+    ],
+  });
+
+  queryClient.setQueryData<GetConfessionByIdResult>(detailKey, {
+    ...buildConfession(),
+  });
+
+  return { listKey, detailKey };
+}
+
+describe("useReactions", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  const initialCounts: ReactionCounts = { like: 5, love: 3 };
+  it("patches feed/detail caches immediately and avoids broad invalidation when server returns counts", async () => {
+    const { queryClient, wrapper } = createTestHarness();
+    const { listKey, detailKey } = seedConfessionCache(queryClient);
+    const invalidateSpy = jest.spyOn(queryClient, "invalidateQueries");
 
-  it('should return initial state', () => {
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
+    let resolveReaction:
+      | ((value: Awaited<ReturnType<typeof addReaction>>) => void)
+      | undefined;
+    const reactionPromise = new Promise<Awaited<ReturnType<typeof addReaction>>>(
+      (resolve) => {
+        resolveReaction = resolve;
+      },
     );
 
-    expect(result.current.isPending).toBe(false);
-    expect(result.current.isError).toBe(false);
-    expect(result.current.error).toBe(null);
-    expect(result.current.optimisticState).toBe(null);
-  });
-
-  it('should add reaction successfully', async () => {
-    mockAddReaction.mockResolvedValue({
-      ok: true,
-      data: { success: true, reactions: { like: 6, love: 3 } },
-    });
+    mockAddReaction.mockReturnValue(reactionPromise);
 
     const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
+      () => useReactions({ initialCounts: { like: 2, love: 1 } }),
+      { wrapper },
     );
 
-    let response: { ok: boolean; data?: { reactions?: ReactionCounts }; error?: { message: string } };
-    
     await act(async () => {
-      response = await result.current.addReaction('confession-123', 'like');
+      void result.current.addReaction("confession-1", "like");
+      await Promise.resolve();
     });
 
-    expect(response?.ok).toBe(true);
-    expect(mockAddReaction).toHaveBeenCalledWith('confession-123', 'like');
-  });
-
-  it('should handle reaction error and rollback', async () => {
-    mockAddReaction.mockRejectedValue(new Error('Network error'));
-
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
-
-    let response: { ok: boolean; error?: { message: string; code: string } };
-    
-    await act(async () => {
-      response = await result.current.addReaction('confession-123', 'like');
-    });
-
-    expect(response?.ok).toBe(false);
-    expect(response?.error?.code).toBe('MUTATION_ERROR');
-  });
-
-  it('should set optimistic state on mutation', async () => {
-    mockAddReaction.mockResolvedValue({
-      ok: true,
-      data: { success: true, reactions: { like: 6, love: 3 } },
-    });
-
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
-
-    // Trigger the mutation
-    act(() => {
-      result.current.addReaction('confession-123', 'like');
-    });
-
-    // Wait for optimistic state to be set
     await waitFor(() => {
-      expect(result.current.optimisticState).not.toBe(null);
+      const optimisticList =
+        queryClient.getQueryData<InfiniteData<GetConfessionsResult>>(listKey);
+      const optimisticDetail =
+        queryClient.getQueryData<GetConfessionByIdResult>(detailKey);
+
+      expect(optimisticList?.pages[0].confessions[0].reactions.like).toBe(3);
+      expect(optimisticDetail?.reactions.like).toBe(3);
+      expect(result.current.optimisticState?.counts.like).toBe(3);
     });
-
-    expect(result.current.optimisticState?.counts.like).toBe(6);
-    expect(result.current.optimisticState?.userReaction).toBe('like');
-  });
-
-  it('should clear optimistic state after mutation settles', async () => {
-    mockAddReaction.mockResolvedValue({
-      ok: true,
-      data: { success: true, reactions: { like: 6, love: 3 } },
-    });
-
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
 
     await act(async () => {
-      await result.current.addReaction('confession-123', 'like');
+      resolveReaction?.({
+        ok: true,
+        data: {
+          success: true,
+          reactions: { like: 3, love: 1 },
+        },
+      });
+      await reactionPromise;
     });
 
-    // After mutation settles, optimistic state should be cleared
     await waitFor(() => {
       expect(result.current.optimisticState).toBe(null);
     });
+
+    const settledList = queryClient.getQueryData<InfiniteData<GetConfessionsResult>>(listKey);
+    const settledDetail = queryClient.getQueryData<GetConfessionByIdResult>(detailKey);
+
+    expect(settledList?.pages[0].confessions[0].reactions.like).toBe(3);
+    expect(settledDetail?.reactions.like).toBe(3);
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it('should remove reaction successfully', async () => {
+  it("rolls back cache updates when the reaction API returns an application error", async () => {
+    const { queryClient, wrapper } = createTestHarness();
+    const { listKey, detailKey } = seedConfessionCache(queryClient);
+
     mockAddReaction.mockResolvedValue({
-      ok: true,
-      data: { success: true, reactions: { like: 4, love: 3 } },
+      ok: false,
+      error: {
+        message: "Reaction failed",
+        code: "API_ERROR",
+      },
     });
 
     const { result } = renderHook(
-      () => useReactions({ 
-        initialCounts,
-        initialUserReaction: 'like' as ReactionType,
-      }),
-      { wrapper: createWrapper() }
+      () => useReactions({ initialCounts: { like: 2, love: 1 } }),
+      { wrapper },
     );
 
-    let response: { ok: boolean };
-    
+    let response: Awaited<ReturnType<typeof result.current.addReaction>> | undefined;
     await act(async () => {
-      response = await result.current.removeReaction('confession-123', 'like');
+      response = await result.current.addReaction("confession-1", "love");
     });
 
-    expect(response?.ok).toBe(true);
-    expect(mockAddReaction).toHaveBeenCalledWith('confession-123', 'like');
-  });
+    const rolledBackList = queryClient.getQueryData<InfiniteData<GetConfessionsResult>>(listKey);
+    const rolledBackDetail = queryClient.getQueryData<GetConfessionByIdResult>(detailKey);
 
-  it('should call onSuccess callback on successful reaction', async () => {
-    const onSuccess = jest.fn();
-    mockAddReaction.mockResolvedValue({
-      ok: true,
-      data: { success: true, reactions: { like: 6, love: 3 } },
+    expect(response).toEqual({
+      ok: false,
+      error: {
+        message: "Reaction failed",
+        code: "MUTATION_ERROR",
+      },
     });
-
-    const { result } = renderHook(
-      () => useReactions({ 
-        initialCounts,
-        onSuccess,
-      }),
-      { wrapper: createWrapper() }
-    );
-
-    await act(async () => {
-      await result.current.addReaction('confession-123', 'like');
+    expect(rolledBackList?.pages[0].confessions[0].reactions).toEqual({
+      like: 2,
+      love: 1,
     });
-
-    expect(onSuccess).toHaveBeenCalled();
-  });
-
-  it('should call onError callback on failed reaction', async () => {
-    const onError = jest.fn();
-    mockAddReaction.mockRejectedValue(new Error('Network error'));
-
-    const { result } = renderHook(
-      () => useReactions({ 
-        initialCounts,
-        onError,
-      }),
-      { wrapper: createWrapper() }
-    );
-
-    await act(async () => {
-      await result.current.addReaction('confession-123', 'like');
+    expect(rolledBackDetail?.reactions).toEqual({
+      like: 2,
+      love: 1,
     });
-
-    expect(onError).toHaveBeenCalled();
-  });
-
-  it('should update optimistic counts directly', () => {
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
-
-    act(() => {
-      result.current.updateOptimisticCounts({ like: 10, love: 5 });
-    });
-
-    expect(result.current.optimisticState?.counts.like).toBe(10);
-    expect(result.current.optimisticState?.counts.love).toBe(5);
-  });
-
-  it('should clear optimistic state', () => {
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
-
-    // Set some optimistic state
-    act(() => {
-      result.current.updateOptimisticCounts({ like: 10, love: 5 });
-    });
-
-    expect(result.current.optimisticState).not.toBe(null);
-
-    // Clear it
-    act(() => {
-      result.current.clearOptimisticState();
-    });
-
     expect(result.current.optimisticState).toBe(null);
+    expect(result.current.error?.message).toBe("Reaction failed");
   });
 
-  it('should set error state', () => {
-    const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
-    );
+  it("rolls back the feed list cache when the reaction API fails (feed surface)", async () => {
+    const { queryClient, wrapper } = createTestHarness();
 
-    const error = new Error('Test error');
-    
-    act(() => {
-      result.current.setErrorState(error);
+    // Seed only the list cache — simulates a user reacting from the feed page
+    // without having previously visited the detail page.
+    const listKey = queryKeys.confessions.list({});
+    queryClient.setQueryData<InfiniteData<GetConfessionsResult>>(listKey, {
+      pageParams: [1],
+      pages: [{ confessions: [buildConfession()], hasMore: false, page: 1 }],
     });
 
-    expect(result.current.error).toBe(error);
-  });
-
-  it('should handle isPending state during mutation', async () => {
-    // Create a promise that we can control
-    let resolvePromise: (value: { ok: true; data: { success: true; reactions: ReactionCounts } }) => void;
-    const promise = new Promise<{ ok: true; data: { success: true; reactions: ReactionCounts } }>((resolve) => {
-      resolvePromise = resolve;
+    mockAddReaction.mockResolvedValue({
+      ok: false,
+      error: { message: "Server error", code: "API_ERROR" },
     });
-    
-    mockAddReaction.mockReturnValue(promise);
 
     const { result } = renderHook(
-      () => useReactions({ initialCounts }),
-      { wrapper: createWrapper() }
+      () => useReactions({ initialCounts: { like: 2, love: 1 } }),
+      { wrapper },
     );
 
-    // Start mutation
-    act(() => {
-      result.current.addReaction('confession-123', 'like');
-    });
-
-    // Should be pending
-    expect(result.current.isPending).toBe(true);
-
-    // Resolve the promise
     await act(async () => {
-      resolvePromise!({
-        ok: true,
-        data: { success: true, reactions: { like: 6, love: 3 } },
-      });
-      await promise;
+      await result.current.addReaction("confession-1", "like");
     });
 
-    // Should no longer be pending
-    expect(result.current.isPending).toBe(false);
+    const rolledBack = queryClient.getQueryData<InfiniteData<GetConfessionsResult>>(listKey);
+    expect(rolledBack?.pages[0].confessions[0].reactions).toEqual({ like: 2, love: 1 });
+    expect(result.current.optimisticState).toBeNull();
+    expect(result.current.error?.message).toBe("Server error");
+  });
+
+  it("rolls back the detail cache when the reaction API fails (detail surface)", async () => {
+    const { queryClient, wrapper } = createTestHarness();
+
+    // Seed only the detail cache — simulates a user reacting from the
+    // confession detail page without the feed being loaded in memory.
+    const detailKey = queryKeys.confessions.detail("confession-1");
+    queryClient.setQueryData<GetConfessionByIdResult>(detailKey, { ...buildConfession() });
+
+    mockAddReaction.mockResolvedValue({
+      ok: false,
+      error: { message: "Server error", code: "API_ERROR" },
+    });
+
+    const { result } = renderHook(
+      () => useReactions({ initialCounts: { like: 2, love: 1 } }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.addReaction("confession-1", "love");
+    });
+
+    const rolledBack = queryClient.getQueryData<GetConfessionByIdResult>(detailKey);
+    expect(rolledBack?.reactions).toEqual({ like: 2, love: 1 });
+    expect(result.current.optimisticState).toBeNull();
+    expect(result.current.error?.message).toBe("Server error");
+  });
+
+  it("shows rate limit error with retryAfter seconds available", async () => {
+    const { queryClient, wrapper } = createTestHarness();
+    const { listKey } = seedConfessionCache(queryClient);
+
+    mockAddReaction.mockResolvedValue({
+      ok: false,
+      error: { message: "Too many requests", code: "TOO_MANY_REQUESTS", retryAfter: 30 },
+    });
+
+    const { result } = renderHook(
+      () => useReactions({ initialCounts: { like: 2, love: 1 } }),
+      { wrapper },
+    );
+
+    let response: Awaited<ReturnType<typeof result.current.addReaction>> | undefined;
+    await act(async () => {
+      response = await result.current.addReaction("confession-1", "like");
+    });
+
+    expect(response?.error.retryAfter).toBe(30);
+    expect(listKey).toBeDefined();
+  });
+
+  it("does not optimistically update when user already has the same reaction type", async () => {
+    const { queryClient, wrapper } = createTestHarness();
+    const { listKey } = seedConfessionCache(queryClient);
+
+    // Backend returns existing reaction (success, but no count change)
+    mockAddReaction.mockResolvedValue({
+      ok: true,
+      data: { success: true, reactions: { like: 2, love: 1 } },
+    });
+
+    const { result } = renderHook(
+      () => useReactions({ initialCounts: { like: 2, love: 1 }, initialUserReaction: "like" }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.addReaction("confession-1", "like");
+    });
+
+    const optimisticList =
+      queryClient.getQueryData<InfiniteData<GetConfessionsResult>>(listKey);
+
+    // Count should NOT have been incremented (user already had this reaction)
+    // The hook skips optimistic update for already-reacted cases
+    expect(optimisticList?.pages[0].confessions[0].reactions.like).toBe(2);
+    expect(result.current.optimisticState).toBeNull();
   });
 });

@@ -1,467 +1,164 @@
 # xConfess
 
-<div align="center">
+xConfess is a monorepo for an anonymous confession platform built with NestJS, Next.js 16, PostgreSQL, Redis-backed queues, WebSockets, and Soroban smart contracts on Stellar.
 
-![xConfess Banner](https://img.shields.io/badge/xConfess-Anonymous%20Confessions-blueviolet?style=for-the-badge)
-[![MIT License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![Stellar](https://img.shields.io/badge/Built%20on-Stellar-7D00FF?style=for-the-badge&logo=stellar)](https://stellar.org)
-[![Soroban](https://img.shields.io/badge/Soroban-Smart%20Contracts-00ADD8?style=for-the-badge)](https://soroban.stellar.org)
+## Repository Layout
 
-**A privacy-first anonymous confession platform leveraging Stellar blockchain for immutability, transparency, and trustless verification.**
+- `xconfess-backend`: API, auth, moderation, notifications, data export, and Stellar integration
+- `xconfess-frontend`: App Router UI, cookie-backed auth/session handling, proxy routes, and admin surfaces
+- `xconfess-contracts`: Soroban Rust workspace for confession anchoring, tipping, and reputation-related contracts
+- `compose.yaml`: local Postgres and Redis stack for development
 
-[💬 Community](https://t.me/xconfess_Community) • [🐛 Report Bug](https://github.com/Godsmiracle001/Xconfess/issues)
+## What This Repo Does Today
 
-</div>
+- anonymous confession feed and composer
+- reactions, comments, and private messaging
+- admin moderation, reports, analytics, and user management
+- privacy settings, notifications, and profile flows
+- Stellar anchoring, tipping, and contract invocation tooling
+- audit logging and data export
 
----
+## Reality Check
 
-## 🌟 What is xConfess?
+- The frontend does not use NextAuth.
+- Auth is cookie/session based, with a dev-only bypass flag: `NEXT_PUBLIC_DEV_BYPASS_AUTH=true`.
+- The frontend talks to the backend through App Router proxy routes and `credentials: "include"`.
+- Redis is required for queue-backed features such as notifications and export jobs.
+- Some export and Stellar workflows are still being hardened; see the open issues for the current backlog.
 
-xConfess is an anonymous confession platform where users can share their thoughts, react to confessions, and engage privately—all while maintaining complete anonymity. By integrating Stellar blockchain technology, we ensure confessions are verifiable, immutable, and censorship-resistant.
+## Local Development
 
-### ✨ Feature Matrix
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| 🔐 Anonymous Confession Posting | ✅ Implemented | Core module with full CRUD |
-| 🎭 Anonymous User Identity | ✅ Implemented | Session-based anonymous users |
-| 😂 Emoji Reactions | ✅ Implemented | Reaction module with WebSocket support |
-| 💬 Commenting System | ✅ Implemented | Nested comments with parent-child |
-| 🔍 Search (Hybrid + Full-text) | ✅ Implemented | Encrypted search support |
-| 🛡️ AI Content Moderation | ✅ Implemented | OpenAI-based moderation pipeline |
-| 📊 Admin Dashboard & RBAC | ✅ Implemented | Role-based access control |
-| 📝 Report System | ✅ Implemented | Report + moderation workflow |
-| 📨 Anonymous Messaging | ✅ Implemented | Author-reply model with constraints |
-| ⛓️ Confession Anchoring (Stellar) | ✅ Implemented | Hash anchoring on Stellar testnet |
-| 🏷️ Tag System | ✅ Implemented | Multi-tag confessions |
-| 🔒 Encryption | ✅ Implemented | Field-level confession encryption |
-| 📋 Audit Logging | ✅ Implemented | Comprehensive audit trail |
-| 💰 XLM Tipping | ✅ Implemented | Stellar-based micro-tipping |
-| 📈 Analytics | ✅ Implemented | View counts, trending |
-| 📦 Data Export | ✅ Implemented | User data export |
-| 🔄 Real-time Updates | ✅ Implemented | WebSocket gateway |
-| 🎨 Frontend (Next.js) | ✅ Implemented | App router with modern UI |
-| 🏆 NFT Badge System | 🗺️ Roadmap | Soroban contract placeholder exists |
-| 📱 Mobile App | 🗺️ Roadmap | Not started |
-| 🌍 Multi-language Support | 🗺️ Roadmap | Not started |
-| 🏛️ Community Governance | 🗺️ Roadmap | Not started |
-
----
-
-## 🛠️ Tech Stack
-
-### Backend (xconfess-backend)
-- **NestJS**: Robust, scalable Node.js framework
-- **PostgreSQL**: Reliable relational database with JSONB support
-- **TypeORM**: Database ORM with migrations
-- **WebSockets**: Real-time communication (Socket.IO)
-- **JWT + Passport**: Secure session management
-- **Redis/In-memory Cache**: Response caching
-- **Swagger/OpenAPI**: API documentation
-
-### Frontend (xconfess-frontend)
-- **Next.js 16**: React framework with App Router
-- **TailwindCSS**: Utility-first styling
-- **Stellar SDK**: Blockchain interactions
-
-### Blockchain (xconfess-contracts)
-- **Soroban**: Stellar smart contract platform
-- **Rust**: Smart contract development language
-- **Stellar SDK**: JavaScript/TypeScript integration
-
----
-
-## 📁 Project Structure
-
-```
-xconfess/
-├── README.md                    # This file
-├── package.json                 # Root workspace config
-├── PERFORMANCE_RESULTS.md       # Benchmark results
-├── PERFORMANCE_BASELINE.md      # Performance baselines
-├── PERFORMANCE_GUIDELINES.md    # Performance guidelines
-│
-├── xconfess-backend/            # NestJS backend (HTTP API is module/controllers only; no Express router tree)
-│   ├── src/
-│   │   ├── main.ts              # App bootstrap
-│   │   ├── app.module.ts        # Root module
-│   │   ├── auth/                # Authentication (JWT, guards)
-│   │   ├── user/                # User management
-│   │   ├── confession/          # Confession CRUD + tags
-│   │   ├── reaction/            # Emoji reactions
-│   │   ├── comment/             # Comments
-│   │   ├── messages/            # Anonymous messaging
-│   │   ├── report/              # Report system
-│   │   ├── admin/               # Admin panel + RBAC
-│   │   ├── moderation/          # AI content moderation
-│   │   ├── audit-log/           # Audit logging
-│   │   ├── logger/              # Structured logging
-│   │   ├── middleware/          # Express middleware
-│   │   ├── stellar/             # Stellar blockchain integration
-│   │   ├── tipping/             # XLM micro-tipping
-│   │   ├── encryption/          # Field-level encryption
-│   │   ├── cache/               # Cache service
-│   │   ├── analytics/           # Analytics module
-│   │   ├── data-export/         # Data export
-│   │   ├── notifications/       # Notification system
-│   │   ├── websocket/           # WebSocket gateway
-│   │   └── config/              # Configuration
-│   ├── test/                    # E2E tests
-│   ├── e2e/                     # Additional E2E tests
-│   └── migrations/              # Database migrations
-│
-├── xconfess-frontend/           # Next.js frontend
-│   └── src/
-│       ├── app/                 # App router pages
-│       ├── components/          # React components
-│       └── lib/                 # Utilities
-│
-├── xconfess-contracts/          # Soroban smart contracts
-│   ├── Cargo.toml               # Workspace config
-│   └── contracts/
-│       ├── confession-anchor/   # ✅ Confession hash anchoring
-│       ├── reputation-badges/   # 🗺️ NFT badges (placeholder)
-│       └── anonymous-tipping/   # 🗺️ On-chain tipping (placeholder)
-│
-├── docs/                        # Additional documentation
-├── scripts/                     # Build/deploy scripts
-└── deployments/                 # Deployment configs
-```
-
----
-
-## 🚀 Release Readiness
-
-Use the shared release checklist at [docs/release-readiness-checklist.md](docs/release-readiness-checklist.md) before promoting backend, frontend, or contract changes.
-
-Key supporting references:
-
-- [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) for frontend-heavy deployment verification details
-- [docs/SOROBAN_SETUP.md](docs/SOROBAN_SETUP.md) for Soroban environment setup and contract interaction help
-- [maintainer/issues/125-docs-contract-release-and-upgrade-runbook.md](maintainer/issues/125-docs-contract-release-and-upgrade-runbook.md) for contract release and rollback guidance
-- [maintainer/BACKLOG_INDEX.md](maintainer/BACKLOG_INDEX.md) for maintainer backlog grouping, subsystem ownership, and triage routing
-
----
-
-## ⚙️ Installation
+Follow these steps from a fresh clone to get the full stack running.
 
 ### Prerequisites
 
-- **Node.js** (v18+)
-- **PostgreSQL** (v14+)
-- **pnpm** or **npm**
-- **Rust** (for Soroban contract development)
-- **Stellar CLI** (optional, for contract deployment)
+- Node.js ≥ 18 and npm ≥ 9
+- Docker (for Postgres and Redis)
+- Rust + `cargo` (only needed if working on contracts — see `docs/SOROBAN_SETUP.md`)
 
-### Quick Start
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/Godsmiracle001/xconfess.git
-   cd xconfess
-   ```
-
-2. **Install backend dependencies**
-   ```bash
-   cd xconfess-backend
-   npm install
-   ```
-
-3. **Install frontend dependencies**
-   ```bash
-   cd ../xconfess-frontend
-   npm install
-   ```
-
-4. **Set up environment variables**
-
-   Create a `.env` file in `xconfess-backend` (see `.env.example`):
-
-   ```env
-   DATABASE_URL=postgresql://username:password@localhost:5432/xconfess
-   JWT_SECRET=your-super-secret-jwt-key
-   PORT=5000
-
-   # Stellar Configuration
-   STELLAR_NETWORK=testnet
-   STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
-   CONFESSION_ANCHOR_CONTRACT=<contract-id>
-
-   # Encryption Configuration (64-char hex)
-   CONFESSION_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-   ```
-
-5. **Set up the database**
-   ```bash
-   cd xconfess-backend
-   npm run migration:run
-   ```
-
-6. **Start the backend**
-   ```bash
-   npm run start:dev
-   ```
-
-7. **Start the frontend** (in a new terminal)
-   ```bash
-   cd xconfess-frontend
-   npm run dev
-   ```
-
-8. **Access the application**
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:5000
-   - API Docs: http://localhost:5000/api/api-docs
-
-### Auth Route Split
-
-The backend intentionally exposes both route groups:
-
-- `/api/users/*` for user lifecycle operations (`register`, `login`, `profile`, account state)
-- `/api/auth/*` for auth-centric flows (`login`, `me`, `logout`, `forgot-password`, `reset-password`)
-
-Full, controller-accurate route documentation lives in [xconfess-backend/API_DOCUMENTATION.md](xconfess-backend/API_DOCUMENTATION.md).
-
----
-
-## 🔗 Stellar Smart Contracts
-
-### Quick Start
+### 1. Install dependencies
 
 ```bash
-# 1. Install Stellar CLI
-cargo install --locked stellar-cli --features opt
-
-# 2. Add WebAssembly target
-rustup target add wasm32-unknown-unknown
-
-# 3. Build all contract crates reproducibly (from repo root)
-./scripts/contracts-release.sh build
-
-# 4. Run tests
-./scripts/test-contracts.sh
+npm install
 ```
 
-Versioning policy for contract crates is documented in
-`xconfess-contracts/VERSIONING.md`.
+### 2. Start infrastructure
 
-### Contract Architecture
+`compose.yaml` provides a Postgres 16 instance on **localhost:55432** and a Redis 7 instance on **localhost:6379**.
 
-The `xconfess-contracts/` workspace contains Soroban smart contracts:
-
-| Contract | Status | Description |
-|----------|--------|-------------|
-| `confession-anchor` | ✅ Implemented | Stores 32-byte confession hashes on-chain with timestamps |
-| `reputation-badges` | 🗺️ Placeholder | NFT badge system (contract scaffolded, logic pending) |
-| `anonymous-tipping` | 🗺️ Placeholder | On-chain tipping (contract scaffolded, logic pending) |
-
-### Contract Interaction Examples
-
-**Anchor a Confession (JavaScript)**
-```javascript
-import * as StellarSDK from '@stellar/stellar-sdk';
-
-const contract = new StellarSDK.Contract(CONFESSION_ANCHOR_CONTRACT_ID);
-
-// Create confession hash
-const confessionHash = hashConfession(confessionText);
-
-// Anchor on Stellar
-const tx = await contract.call(
-  'anchor_confession',
-  StellarSDK.nativeToScVal(confessionHash, { type: 'bytes' }),
-  StellarSDK.nativeToScVal(Date.now(), { type: 'u64' })
-);
+```bash
+docker compose -f compose.yaml up -d
 ```
 
-**Verify a Confession (JavaScript)**
-```javascript
-const timestamp = await contract.call(
-  'verify_confession',
-  StellarSDK.nativeToScVal(confessionHash, { type: 'bytes' })
-);
+Verify both containers are healthy before continuing:
+
+```bash
+docker compose -f compose.yaml ps
 ```
 
----
+### 3. Configure environment files
 
-## ⚡ Performance
+**Backend** — copy the sample and fill in the values marked `change-me`:
 
-xConfess is optimized for speed and scalability. See our [Performance Results](PERFORMANCE_RESULTS.md) for detailed metrics.
+```bash
+cp xconfess-backend/.env.example xconfess-backend/.env
+```
 
-### Key Metrics
+Required keys to set before first boot (everything else has safe defaults):
 
-| Metric | Value | Status |
-|--------|-------|--------|
-| API Response Time | < 100ms avg | ✅ |
-| Page Load Time | < 2s | ✅ |
-| Lighthouse Score | 94/100 | ✅ |
-| Database Queries | < 100ms | ✅ |
-| Cache Hit Rate | 82% | ✅ |
+| Key | Purpose |
+|-----|---------|
+| `JWT_SECRET` | Signs auth tokens — use any long random string locally |
+| `APP_SECRET` | App-level HMAC secret — use any long random string locally |
+| `CONFESSION_ENCRYPTION_KEY` | 64-character hex string used to encrypt confession content |
+| `STELLAR_SERVER_SECRET` | Stellar keypair secret for on-chain operations (testnet only) |
 
-📊 **Full Report**: [PERFORMANCE_RESULTS.md](PERFORMANCE_RESULTS.md)
+Mail (`MAIL_HOST`, `MAIL_USER`, `MAIL_PASSWORD`) and Stellar contract IDs are pre-filled with testnet values in the example file and can be left as-is for local development.
 
----
+**Frontend** — copy the sample (no secrets required for basic local use):
 
-## 🤝 Contributing
+```bash
+cp xconfess-frontend/.env.example xconfess-frontend/.env.local
+```
 
-We welcome contributions from the community! xConfess is participating in the **Stellar Wave Program** 🌊
+The example file points all URLs at `localhost:5000` (backend) and `localhost:3000` (frontend) and is ready to use without changes. If you want to skip the auth flow during UI development, add:
 
-### How to Contribute
+```
+NEXT_PUBLIC_DEV_BYPASS_AUTH=true
+```
 
-1. **Find an Issue**
-   - Browse [open issues](https://github.com/Godsmiracle001/Xconfess/issues)
-   - Look for `good first issue`, `help wanted`, or `Stellar Wave` labels
-   - Comment to get assigned
+### 4. Boot the full stack
 
-2. **Fork & Branch**
-   ```bash
-   git checkout -b feat/your-feature-name
-   ```
+```bash
+npm run dev
+```
 
-3. **Make Your Changes**
-   - Write clean, tested code
-   - Follow existing code style
-   - Update documentation if needed
+This starts the backend and frontend concurrently. Once both are ready:
 
-4. **Commit & Push**
-   ```bash
-   git commit -m "feat: add stellar wallet connection"
-   git push origin feat/your-feature-name
-   ```
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API | http://localhost:5000 |
+| Postgres | localhost:55432 |
+| Redis | localhost:6379 |
 
-5. **Submit a Pull Request**
-   - Include `Closes #<issue-number>` in description
-   - Fill out the PR template
-   - Wait for review
+### Running individual services
 
-### 📋 Contribution Guidelines
+```bash
+# Backend only
+npm run dev:backend
 
-✅ **Before Submitting:**
-- Join our [Telegram community](https://t.me/xconfess_Community)
-- Get assigned to the issue first
-- Ensure all tests pass
-- Update documentation
+# Frontend only
+npm run dev:frontend
+```
 
-✅ **Code Quality:**
-- Write unit tests for new features
-- Follow TypeScript/Rust best practices
-- Use meaningful variable names
-- Comment complex logic
+## Scripts Reference
 
-✅ **Commit Messages:**
-- Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`
-- Keep messages clear and concise
-- Reference issue numbers
+### Tests
 
----
+```bash
+# Backend unit tests
+npm run backend:test
 
-## 🌊 Stellar Wave Program
+# Backend e2e tests (requires running stack)
+npm run backend:test:e2e
 
-xConfess is proud to participate in the **Stellar Development Foundation's Wave Program**!
+# Frontend tests
+npm run frontend:test
 
-### How to Participate
+# Contract tests (requires Rust toolchain)
+npm run contract:test
+```
 
-1. **Browse Wave Issues**: Look for issues tagged with `Stellar Wave`
-2. **Apply to Work**: Comment on the issue to express interest
-3. **Get Assigned**: Maintainers will review and assign you
-4. **Submit Quality Work**: Create a PR that meets acceptance criteria
-5. **Earn Rewards**: Get points and rewards from the Stellar Development Foundation
+### Builds
 
-### Wave Resources
+```bash
+npm run backend:build
+npm run frontend:build
+npm run contract:build
+```
 
-- [Stellar Wave Documentation](https://docs.drips.network/wave)
-- [Drips Wave App](https://www.drips.network/wave)
-- [Soroban Documentation](https://soroban.stellar.org/docs)
+### Lint
 
----
+```bash
+npm run backend:lint
+npm run frontend:lint
+npm run contract:lint
+```
 
-## 🗺️ Roadmap
+### Full CI check (mirrors the CI pipeline)
 
-### ✅ Phase 1: Core Platform (Complete)
-- [x] Anonymous confession posting with encryption
-- [x] Emoji reactions with WebSocket updates
-- [x] Commenting system
-- [x] Anonymous messaging (author-reply model)
-- [x] AI content moderation
-- [x] Admin dashboard with RBAC
-- [x] Report system
-- [x] Tag system
-- [x] Search (hybrid + full-text)
-- [x] Audit logging
-- [x] Data export
+```bash
+npm run ci
+```
 
-### ✅ Phase 2: Stellar Integration (Complete)
-- [x] Soroban confession-anchor contract
-- [x] Backend anchoring + verification endpoints
-- [x] XLM tipping module
-- [x] Stellar service integration
-- [ ] Freighter wallet frontend integration (in progress)
+This runs `ci:backend`, `ci:frontend`, and `ci:contract` in sequence — build, lint, and test for each package.
 
-### 🚧 Phase 3: Advanced Features (Q2 2026)
-- [ ] NFT badge system (Soroban contract)
-- [ ] E2E encrypted messaging upgrade
-- [ ] Advanced analytics dashboard
-- [ ] Content recommendation engine
-- [ ] Mobile app (React Native)
+## Contributing
 
-### 🔮 Phase 4: Mainnet & Scale (Q3 2026)
-- [ ] Deploy to Stellar Mainnet
-- [ ] Community governance
-- [ ] Multi-language support
-- [ ] Premium features
+xConfess participates in Stellar Wave. Check the open issues for work tagged `Stellar Wave`, then coordinate before opening a PR.
 
----
-
-## 📊 Statistics
-
-- 🚀 **Contributors**: 10+
-- ⭐ **GitHub Stars**: Growing daily
-- 🔧 **Open Issues**: [View Issues](https://github.com/Godsmiracle001/Xconfess/issues)
-- 📦 **Pull Requests**: [View PRs](https://github.com/Godsmiracle001/Xconfess/pulls)
-
----
-
-## 🤝 Community & Support
-
-### Join the Conversation
-
-- 💬 **Discord**: [xConfess Community](https://discord.gg/5qVnXvzd)
-- 💬 **Telegram**: [xConfess Community](https://t.me/xconfess_Community)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/Godsmiracle001/Xconfess/issues)
-
-### Get Help
-
-- Check existing [issues](https://github.com/Godsmiracle001/Xconfess/issues) and [discussions](https://github.com/Godsmiracle001/Xconfess/discussions)
-- Join our Telegram for real-time support
-
----
-
-## 📜 License
-
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **Stellar Development Foundation** for supporting this project through the Wave Program
-- All our amazing **contributors** and **community members**
-- The **Soroban** team for excellent smart contract tooling
-
----
-
-## 🌟 Star History
-
-If you find xConfess valuable, please give us a ⭐ on GitHub!
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Godsmiracle001/Xconfess&type=Date)](https://star-history.com/#Godsmiracle001/Xconfess&Date)
-
----
-
-<div align="center">
-
-**Built with ❤️ for the Stellar ecosystem**
-
-[Community](https://t.me/xconfess_Community) • [Contribute](https://github.com/Godsmiracle001/Xconfess/issues)
-
-</div>
+## Package Docs
+- `xconfess-backend/README.md`
+- `xconfess-frontend/README.md`
+- `xconfess-contracts/README.md`

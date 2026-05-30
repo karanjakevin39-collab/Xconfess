@@ -1,3 +1,5 @@
+import type { TipStats } from "@/lib/services/tipping.service";
+
 //  The stable shape that all frontend components consume.
 export interface NormalizedConfession {
   id: string;
@@ -7,10 +9,14 @@ export interface NormalizedConfession {
   commentCount: number;
   reactions: Record<string, number>;
   gender?: string | null;
+  isAnchored?: boolean;
+  stellarTxHash?: string | null;
+  tipStats?: TipStats | null;
   author?: {
     id: string;
     username?: string;
     avatar?: string;
+    stellarAddress?: string;
   };
   _demo?: boolean;
 }
@@ -34,10 +40,14 @@ export interface RawConfession {
   // Reactions: either an array of { type, count } or an already-normalized object
   reactions?: Array<{ type: string; count?: number }> | Record<string, number>;
   gender?: string | null;
+  isAnchored?: boolean;
+  stellarTxHash?: string | null;
+  tipStats?: TipStats | null;
   author?: {
     id: string;
     username?: string;
     avatar?: string;
+    stellarAddress?: string;
   };
   _demo?: boolean;
 }
@@ -76,12 +86,16 @@ export function normalizeConfession(raw: RawConfession): NormalizedConfession {
       (Array.isArray(raw.comments) ? raw.comments.length : 0),
     reactions: normalizeReactions(raw.reactions), // always Record<string, number>
     gender: raw.gender ?? null,
+    isAnchored: raw.isAnchored ?? false,
+    stellarTxHash: raw.stellarTxHash ?? null,
+    tipStats: raw.tipStats ?? null,
 
     author: raw.author
       ? {
           id: raw.author.id ?? "",
           username: raw.author.username ?? "Anonymous",
           avatar: raw.author.avatar ?? undefined, // convert null → undefined
+          stellarAddress: raw.author.stellarAddress,
         }
       : { id: "", username: "Anonymous" },
     ...(raw._demo !== undefined ? { _demo: raw._demo } : {}),

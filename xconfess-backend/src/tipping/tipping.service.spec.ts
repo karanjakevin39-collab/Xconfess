@@ -20,6 +20,20 @@ describe('TippingService', () => {
       save: jest.fn((tip) =>
         Promise.resolve({ ...tip, id: tip.id || 'tip-123' }),
       ),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn(() => ({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      })),
+    };
+    mockTipRepo.manager = {
+      transaction: jest.fn((callback) =>
+        callback({
+          getRepository: jest.fn(() => mockTipRepo),
+        }),
+      ),
     };
 
     mockConfessionRepo = {

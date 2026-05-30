@@ -107,6 +107,26 @@ fn bump_nonce(env: &Env, key: EventNonceKey) -> u64 {
     next
 }
 
+pub fn latest_confession_nonce(env: &Env, confession_id: u64) -> u64 {
+    read_nonce(env, &EventNonceKey::Confession(confession_id))
+}
+
+pub fn latest_reaction_nonce(env: &Env, confession_id: u64) -> u64 {
+    read_nonce(env, &EventNonceKey::Reaction(confession_id))
+}
+
+pub fn latest_report_nonce(env: &Env, confession_id: u64) -> u64 {
+    read_nonce(env, &EventNonceKey::Report(confession_id))
+}
+
+pub fn latest_role_nonce(env: &Env, user: Address, role: Symbol) -> u64 {
+    read_nonce(env, &EventNonceKey::Role(user, role))
+}
+
+pub fn latest_badge_nonce(env: &Env, badge_id: u64) -> u64 {
+    read_nonce(env, &EventNonceKey::Badge(badge_id))
+}
+
 pub fn latest_governance_nonce(env: &Env, stream: Symbol) -> u64 {
     read_nonce(env, &EventNonceKey::Governance(stream))
 }

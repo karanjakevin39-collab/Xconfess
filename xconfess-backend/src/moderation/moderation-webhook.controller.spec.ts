@@ -9,6 +9,9 @@ describe('ModerationWebhookController', () => {
   let confessionRepo: {
     findOne: jest.Mock;
     save: jest.Mock;
+    manager: {
+      transaction: jest.Mock;
+    };
   };
   let moderationRepoService: {
     syncWebhookResult: jest.Mock;
@@ -37,9 +40,22 @@ describe('ModerationWebhookController', () => {
   };
 
   beforeEach(() => {
+    const txFindOne = jest.fn().mockResolvedValue({ ...confession });
+    const txSave = jest.fn().mockImplementation(async (value) => value);
+
     confessionRepo = {
-      findOne: jest.fn().mockResolvedValue({ ...confession }),
-      save: jest.fn().mockImplementation(async (value) => value),
+      findOne: txFindOne,
+      save: txSave,
+      manager: {
+        transaction: jest.fn(async (work) =>
+          work({
+            getRepository: jest.fn().mockReturnValue({
+              findOne: txFindOne,
+              save: txSave,
+            }),
+          }),
+        ),
+      },
     };
     moderationRepoService = {
       syncWebhookResult: jest
@@ -82,6 +98,7 @@ describe('ModerationWebhookController', () => {
           requiresReview: true,
         }),
       }),
+      expect.anything(),
     );
     expect(confessionRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,6 +174,55 @@ describe('ModerationWebhookController', () => {
       status: ModerationStatus.FLAGGED,
       isIdempotent: true,
     });
+  });
+
+  it('rolls back staged webhook log updates when confession save fails', async () => {
+    const payload = {
+      confessionId: 'conf-123',
+      moderationScore: 0.85,
+      moderationFlags: ['harassment'],
+      moderationStatus: ModerationStatus.FLAGGED,
+      details: { harassment: 0.85 },
+      timestamp: '2026-03-25T10:00:00.000Z',
+    };
+
+    const committed = {
+      moderationLogs: 0,
+      isHidden: confession.isHidden,
+    };
+
+    confessionRepo.manager.transaction.mockImplementationOnce(async (work) => {
+      let stagedLogCount = committed.moderationLogs;
+      const stagedConfession = { ...confession };
+      const txRepo = {
+        findOne: jest.fn().mockResolvedValue(stagedConfession),
+        save: jest
+          .fn()
+          .mockRejectedValue(new Error('Injected failure after log write')),
+      };
+
+      moderationRepoService.syncWebhookResult.mockImplementationOnce(
+        async () => {
+          stagedLogCount += 1;
+          return { log: { id: 'log-rollback' }, isIdempotent: false };
+        },
+      );
+
+      const value = await work({
+        getRepository: jest.fn().mockReturnValue(txRepo),
+      });
+      committed.moderationLogs = stagedLogCount;
+      committed.isHidden = stagedConfession.isHidden;
+      return value;
+    });
+
+    await expect(
+      controller.handleModerationResults(payload, buildSignature(payload)),
+    ).rejects.toThrow('Injected failure after log write');
+
+    expect(committed.moderationLogs).toBe(0);
+    expect(committed.isHidden).toBe(false);
+    expect(eventEmitter.emit).not.toHaveBeenCalled();
   });
 
   it('rejects webhook requests with an invalid signature', async () => {

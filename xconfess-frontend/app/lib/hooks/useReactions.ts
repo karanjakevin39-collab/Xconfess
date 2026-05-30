@@ -3,6 +3,11 @@
 import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { addReaction, type AddReactionResponse } from "@/app/lib/api/reactions";
+import {
+  restoreQuerySnapshots,
+  snapshotConfessionQueries,
+  updateConfessionQueries,
+} from "@/app/lib/api/confessionCache";
 import type { ReactionType, ReactionCounts } from "@/app/lib/types/reaction";
 import { queryKeys } from "@/app/lib/api/queryKeys";
 
@@ -17,7 +22,7 @@ export interface UseReactionsOptions {
    */
   initialCounts?: ReactionCounts;
   /**
-   * Initial user reaction state
+   * Initial user reaction state (the reaction type the user already has)
    */
   initialUserReaction?: ReactionType | null;
   /**
@@ -36,7 +41,7 @@ export interface UseReactionsReturn {
    */
   addReaction: (confessionId: string, type: ReactionType) => Promise<AddReactionResponse>;
   /**
-   * Remove a reaction (toggle off)
+   * Remove a reaction (currently unsupported by the backend API)
    */
   removeReaction: (confessionId: string, type: ReactionType) => Promise<AddReactionResponse>;
   /**
@@ -69,6 +74,24 @@ export interface UseReactionsReturn {
   setErrorState: (error: Error | null) => void;
 }
 
+function normalizeCounts(counts?: Partial<ReactionCounts> | null): ReactionCounts {
+  return {
+    like: Math.max(0, counts?.like ?? 0),
+    love: Math.max(0, counts?.love ?? 0),
+  };
+}
+
+function incrementReactionCount(
+  counts: Partial<ReactionCounts> | null | undefined,
+  type: ReactionType,
+): ReactionCounts {
+  const normalized = normalizeCounts(counts);
+  return {
+    ...normalized,
+    [type]: normalized[type] + 1,
+  };
+}
+
 /**
  * Hook for managing reactions with optimistic updates and rollback.
  * 
@@ -87,103 +110,65 @@ export function useReactions(options: UseReactionsOptions = {}): UseReactionsRet
   const [localError, setLocalError] = useState<Error | null>(null);
 
   const mutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       confessionId,
       type,
     }: {
       confessionId: string;
       type: ReactionType;
-      isRemoval?: boolean;
-    }) => addReaction(confessionId, type),
+    }) => {
+      const result = await addReaction(confessionId, type);
+
+      if (!result.ok) {
+        throw new Error(result.error.message || "Failed to add reaction");
+      }
+
+      return result;
+    },
 
     // Called before the mutation function
     onMutate: async (variables) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: queryKeys.confessions.all });
-      await queryClient.cancelQueries({
-        queryKey: queryKeys.confessions.detail(variables.confessionId),
-      });
+      const previousConfessionQueries = snapshotConfessionQueries(queryClient);
 
-      // Snapshot the previous values
-      const previousConfessions = queryClient.getQueryData(queryKeys.confessions.all);
-      const previousConfessionDetail = queryClient.getQueryData(
-        queryKeys.confessions.detail(variables.confessionId)
-      );
-
-      // Optimistically update the cache
-      const updateReactions = (counts: ReactionCounts): ReactionCounts => {
-        const delta = variables.isRemoval ? -1 : 1;
-        return {
-          ...counts,
-          [variables.type]: Math.max(0, (counts[variables.type] || 0) + delta),
-        };
-      };
-
-      // Update list query
-      queryClient.setQueryData(queryKeys.confessions.all, (old: unknown) => {
-        if (!old || !Array.isArray(old)) return old;
-        return old.map((confession: Record<string, unknown>) => {
-          if (confession.id === variables.confessionId) {
-            return {
-              ...confession,
-              reactions: updateReactions(confession.reactions as ReactionCounts || { like: 0, love: 0 }),
-            };
-          }
-          return confession;
-        });
-      });
-
-      // Update detail query
-      queryClient.setQueryData(
-        queryKeys.confessions.detail(variables.confessionId),
-        (old: unknown) => {
-          if (!old) return old;
-          const data = old as Record<string, unknown>;
-          return {
-            ...data,
-            reactions: updateReactions(data.reactions as ReactionCounts || { like: 0, love: 0 }),
-          };
-        }
+      updateConfessionQueries(
+        queryClient,
+        variables.confessionId,
+        (confession) => ({
+          ...confession,
+          reactions: incrementReactionCount(
+            confession.reactions as Partial<ReactionCounts> | undefined,
+            variables.type,
+          ),
+        }),
       );
 
       // Set optimistic state for hook consumers
-      const newCounts = initialCounts 
-        ? updateReactions(initialCounts) 
-        : { like: 0, love: 0 };
-      
+      const newCounts = incrementReactionCount(initialCounts, variables.type);
+
       setOptimisticState({
         counts: newCounts,
-        userReaction: variables.isRemoval ? null : variables.type,
+        userReaction: variables.type,
       });
-      
       setLocalError(null);
 
       // Return context with previous values for rollback
       return {
-        previousConfessions,
-        previousConfessionDetail,
-        variables,
+        previousConfessionQueries,
       };
     },
 
     // Called if mutation fails
-    onError: (error, variables, context) => {
+    onError: (error, _variables, context) => {
+      // Set error state
+      setLocalError(error as Error);
+
       // Rollback to previous values
-      if (context?.previousConfessions) {
-        queryClient.setQueryData(queryKeys.confessions.all, context.previousConfessions);
-      }
-      if (context?.previousConfessionDetail) {
-        queryClient.setQueryData(
-          queryKeys.confessions.detail(variables.confessionId),
-          context.previousConfessionDetail
-        );
-      }
+      restoreQuerySnapshots(queryClient, context?.previousConfessionQueries);
 
       // Clear optimistic state
       setOptimisticState(null);
-      
-      // Set error state
-      setLocalError(error as Error);
 
       // Call error callback
       if (onError) {
@@ -191,14 +176,33 @@ export function useReactions(options: UseReactionsOptions = {}): UseReactionsRet
       }
     },
 
-    // Called after mutation settles (success or error)
-    onSettled: (_data, _error, variables) => {
-      // Invalidate queries to refetch from server
-      queryClient.invalidateQueries({ queryKey: queryKeys.confessions.all });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.confessions.detail(variables.confessionId),
-      });
+    onSuccess: (result, variables) => {
+      // Only update cache if we had optimistic state
+      if (result.data.reactions) {
+        const serverCounts = normalizeCounts(result.data.reactions);
 
+        updateConfessionQueries(
+          queryClient,
+          variables.confessionId,
+          (confession) => ({
+            ...confession,
+            reactions: serverCounts,
+          }),
+        );
+
+        setOptimisticState({
+          counts: serverCounts,
+          userReaction: variables.type,
+        });
+      } else {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.confessions.all,
+        });
+      }
+    },
+
+    // Called after mutation settles (success or error)
+    onSettled: () => {
       // Clear optimistic state after invalidation (keep for a moment for smooth UI)
       setTimeout(() => {
         setOptimisticState(null);
@@ -210,13 +214,28 @@ export function useReactions(options: UseReactionsOptions = {}): UseReactionsRet
     confessionId: string,
     type: ReactionType
   ): Promise<AddReactionResponse> => {
-    try {
-      const result = await mutation.mutateAsync({ confessionId, type, isRemoval: false });
+    // If user already has this reaction, skip optimistic update (no count change expected)
+    const alreadyReacted = initialUserReaction === type;
+    if (alreadyReacted) {
+      // Still call the API to get the latest state, but don't optimistically update
+      const result = await addReaction(confessionId, type);
       
-      if (result.ok && onSuccess) {
+      // Backend returns success with existing reaction (no change)
+      // We don't need to do anything special here - the UI already shows the correct state
+      if (onSuccess && result.ok) {
         onSuccess(result);
       }
       
+      return result;
+    }
+    
+    try {
+      const result = await mutation.mutateAsync({ confessionId, type, alreadyReacted: false });
+
+      if (onSuccess) {
+        onSuccess(result);
+      }
+
       return result;
     } catch (error) {
       // Error is already handled in onError callback
@@ -228,30 +247,23 @@ export function useReactions(options: UseReactionsOptions = {}): UseReactionsRet
         },
       };
     }
-  }, [mutation, onSuccess]);
+  }, [mutation, onSuccess, initialUserReaction]);
 
   const handleRemoveReaction = useCallback(async (
-    confessionId: string,
-    type: ReactionType
+    _confessionId: string,
+    _type: ReactionType
   ): Promise<AddReactionResponse> => {
-    try {
-      const result = await mutation.mutateAsync({ confessionId, type, isRemoval: true });
-      
-      if (result.ok && onSuccess) {
-        onSuccess(result);
-      }
-      
-      return result;
-    } catch (error) {
-      return {
-        ok: false,
-        error: { 
-          message: error instanceof Error ? error.message : "Failed to remove reaction",
-          code: "MUTATION_ERROR"
-        },
-      };
-    }
-  }, [mutation, onSuccess]);
+    const error = {
+      message: "Removing reactions is not supported by the current API.",
+      code: "UNSUPPORTED_OPERATION",
+    } as const;
+
+    setLocalError(new Error(error.message));
+    return {
+      ok: false,
+      error,
+    };
+  }, []);
 
   const clearOptimisticState = useCallback(() => {
     setOptimisticState(null);

@@ -41,33 +41,42 @@ export class ModerationRepositoryService {
     return await repo.save(log);
   }
 
-  async syncWebhookResult(params: {
-    confessionId: string;
-    content: string;
-    userId?: string;
-    result: ModerationResult;
-    deliveryHash: string;
-    deliveryTimestamp: string;
-  }): Promise<{ log: ModerationLog; isIdempotent: boolean }> {
-    const existing = await this.moderationLogRepo.findOne({
+  async syncWebhookResult(
+    params: {
+      confessionId: string;
+      content: string;
+      userId?: string;
+      result: ModerationResult;
+      deliveryHash: string;
+      deliveryTimestamp: string;
+      signatureValid?: boolean;
+      payloadMalformed?: boolean;
+    },
+    manager?: EntityManager,
+  ): Promise<{ log: ModerationLog; isIdempotent: boolean }> {
+    const repo = manager
+      ? manager.getRepository(ModerationLog)
+      : this.moderationLogRepo;
+
+    const existing = await repo.findOne({
       where: { confessionId: params.confessionId },
       order: { createdAt: 'DESC' },
     });
 
     const existingWebhookHash = existing?.metadata?.webhook?.deliveryHash;
-    if (existingWebhookHash === params.deliveryHash) {
+    if (existing && existingWebhookHash === params.deliveryHash) {
       return { log: existing, isIdempotent: true };
     }
 
     const log =
       existing ??
-      this.moderationLogRepo.create({
+      repo.create({
         confessionId: params.confessionId,
         userId: params.userId,
         content: params.content.substring(0, 5000),
       });
 
-    log.userId = params.userId;
+    log.userId = params.userId ?? '';
     log.content = params.content.substring(0, 5000);
     log.moderationScore = params.result.score;
     log.moderationFlags = params.result.flags;
@@ -82,11 +91,13 @@ export class ModerationRepositoryService {
         deliveryHash: params.deliveryHash,
         timestamp: params.deliveryTimestamp,
         processedAt: new Date().toISOString(),
+        signatureValid: params.signatureValid ?? true,
+        payloadMalformed: params.payloadMalformed ?? false,
       },
     };
 
     return {
-      log: await this.moderationLogRepo.save(log),
+      log: await repo.save(log),
       isIdempotent: false,
     };
   }

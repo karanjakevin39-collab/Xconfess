@@ -1,4 +1,3 @@
-// xconfess-backend/src/report/reports.service.ts
 import {
   Injectable,
   BadRequestException,
@@ -8,11 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import {
-  Report,
-  ReportStatus,
-  ReportType,
-} from '../admin/entities/report.entity';
+import { Report, ReportStatus, ReportType } from '../admin/entities/report.entity'
 import { CreateReportDto } from './dto/create-report.dto';
 import { ResolveReportDto } from './dto/resolve-report.dto';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
@@ -55,7 +50,11 @@ export class ReportsService {
     confessionId: string,
     reporterId: number | null,
     dto: CreateReportDto,
-    context?: { ipAddress?: string; userAgent?: string; anonymousUserId?: string },
+    context?: {
+      ipAddress?: string;
+      userAgent?: string;
+      anonymousUserId?: string;
+    },
     idempotencyKey?: string,
   ): Promise<Report> {
     // ── Idempotency replay ────────────────────────────────────────────────────
@@ -117,14 +116,25 @@ export class ReportsService {
 
       const existingReport = await qb.getOne();
       if (existingReport) {
-        throw new BadRequestException(DUPLICATE_REPORT_MESSAGE);
+        // Return the existing report for idempotent replay rather than an error.
+        // This gives callers a deterministic response for retried submissions
+        // without creating duplicate moderation records.
+        this.logger.debug(
+          `Deduplicated report for confession ${confessionId} by ${
+            reporterId !== null
+              ? `reporter ${reporterId}`
+              : `anon ${context?.anonymousUserId ?? 'unknown'}`
+          } — returning existing report ${existingReport.id}`,
+        );
+        return existingReport;
       }
 
       // 3️⃣ Persist — DB unique index catches any concurrent duplicates
       const report = manager.getRepository(Report).create({
         confessionId,
         reporterId: reporterId ?? undefined,
-        anonymousReporterId: reporterId === null ? context?.anonymousUserId : undefined,
+        anonymousReporterId:
+          reporterId === null ? context?.anonymousUserId : undefined,
         type: dto.type ?? ReportType.OTHER,
         reason: dto.reason ?? null,
         status: ReportStatus.PENDING,
@@ -137,8 +147,17 @@ export class ReportsService {
         savedReport = await reportRepo.save(report);
       } catch (err: unknown) {
         if (isDuplicateReportConstraintViolation(err)) {
-          // Could be the idempotency index or the dedupe index — both are safe
-          // to surface as the duplicate-report message to the caller.
+          // Concurrent duplicate hit the DB unique index — look up and return
+          // the winner row so the caller gets a deterministic response.
+          const concurrent = await reportRepo.findOne({
+            where: {
+              confessionId,
+              ...(idempotencyKey && reporterId !== null
+                ? { idempotencyKey, reporterId }
+                : {}),
+            },
+          });
+          if (concurrent) return concurrent;
           throw new BadRequestException(DUPLICATE_REPORT_MESSAGE);
         }
         throw err;

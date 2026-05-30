@@ -11,6 +11,7 @@ import { AnalyticsModule } from '../analytics/analytics.module';
 import { WebSocketLogger } from '../websocket/websocket.logger';
 import { ReactionsGateway } from './reactions.gateway';
 import { WebSocketHealthController } from '../websocket/websocket-health.controller';
+import { WebSocketHealthService } from '../websocket/websocket-health.service';
 
 @Module({
   imports: [
@@ -24,8 +25,7 @@ import { WebSocketHealthController } from '../websocket/websocket-health.control
     AnalyticsModule,
   ],
   controllers: [ReactionController, WebSocketHealthController],
-  providers: [ReactionService, WebSocketLogger, ReactionsGateway],
+  providers: [ReactionService, WebSocketLogger, ReactionsGateway, WebSocketHealthService],
   exports: [ReactionService, ReactionsGateway],
 })
 export class ReactionModule {}
-

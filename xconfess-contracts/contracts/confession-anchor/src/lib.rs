@@ -1,11 +1,12 @@
 #![no_std]
+#![allow(dead_code)]
 
 mod errors;
 mod events;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, String,
-    Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, Address,
+    BytesN, Env, String, Symbol, Vec,
 };
 
 #[path = "../../access_control.rs"]
@@ -18,6 +19,9 @@ pub const CONTRACT_SEMVER_MAJOR: u32 = 1;
 pub const CONTRACT_SEMVER_MINOR: u32 = 0;
 pub const CONTRACT_SEMVER_PATCH: u32 = 0;
 pub const CONTRACT_BUILD_METADATA: &str = "xconfess.confession-anchor+2026-03-23";
+pub const MIN_SUPPORTED_FROM_MAJOR: u32 = 1;
+pub const MIN_SUPPORTED_FROM_MINOR: u32 = 0;
+pub const UPGRADE_POLICY_VERSION: u32 = 1;
 
 const CAPABILITY_ANCHOR_V1: Symbol = symbol_short!("anchorv1");
 const CAPABILITY_VERIFY_V1: Symbol = symbol_short!("verifyv1");
@@ -27,6 +31,10 @@ const CAPABILITY_META_V1: Symbol = symbol_short!("meta_v1");
 const CAPABILITY_ADMIN_V1: Symbol = symbol_short!("adminv1");
 const CAPABILITY_PAUSE_V1: Symbol = symbol_short!("pausev1");
 
+/// Schema version constants for upgrade-safe migration.
+pub const ANCHOR_SCHEMA_VERSION_INITIAL: u32 = 1;
+pub const ANCHOR_SCHEMA_VERSION_CURRENT: u32 = 2;
+
 /// Storage keys for confession-anchor state
 #[contracttype]
 #[derive(Clone)]
@@ -35,6 +43,13 @@ pub enum DataKey {
     Owner,
     /// Admin set: Map<Address, ()>
     Admins,
+    /// Tracks which schema version has been applied to this contract's storage.
+    /// Absent → ANCHOR_SCHEMA_VERSION_INITIAL (pre-versioning deployment).
+    SchemaVersion,
+    /// v2: timestamp of the most recently successfully anchored confession.
+    /// Absent before `migrate()` is called; 0 means no anchor has occurred
+    /// since migration (i.e. pre-migration anchors are not back-filled).
+    LastAnchorTimestamp,
 }
 
 #[contracttype]
@@ -61,6 +76,94 @@ pub struct ContractCapabilityInfo {
     pub error_registry_version: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpgradeCompatibilityPolicy {
+    pub policy_version: u32,
+    pub current_major: u32,
+    pub current_minor: u32,
+    pub current_patch: u32,
+    pub min_supported_from_major: u32,
+    pub min_supported_from_minor: u32,
+    pub allow_major_upgrade: bool,
+}
+
+#[contractevent(topics = ["confession_anchor"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfessionAnchoredEvent {
+    #[topic]
+    pub hash: BytesN<32>,
+    /// Explicit schema discriminator for backend decoders.
+    /// Bump `events::EVENT_SCHEMA_VERSION` when the payload shape changes.
+    pub event_version: u32,
+    pub timestamp: u64,
+    pub anchor_height: u32,
+}
+
+#[contractevent(topics = ["version_compatibility_checked"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionCompatibilityCheckedEvent {
+    pub event_version: u32,
+    pub nonce: u64,
+    pub timestamp: u64,
+    pub from_major: u32,
+    pub from_minor: u32,
+    pub from_patch: u32,
+    pub to_major: u32,
+    pub to_minor: u32,
+    pub to_patch: u32,
+    pub compatible: bool,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    NotOwner = 1,
+    NotAuthorized = 2,
+    AlreadyAdmin = 3,
+    NotAdmin = 4,
+    NotInitialized = 5,
+    CannotDemoteOwner = 6,
+    CannotRevokeLastAdmin = 7,
+    InvalidOwnershipTransfer = 8,
+    AlreadyPaused = 9,
+    NotPaused = 10,
+    Unauthorized = 11,
+    ContractPaused = 12,
+    AlreadyOperator = 13,
+    NotOperator = 14,
+    IncompatibleUpgrade = 15,
+}
+
+impl From<access_control::AccessError> for Error {
+    fn from(value: access_control::AccessError) -> Self {
+        match value {
+            access_control::AccessError::NotOwner => Self::NotOwner,
+            access_control::AccessError::NotAuthorized => Self::NotAuthorized,
+            access_control::AccessError::AlreadyAdmin => Self::AlreadyAdmin,
+            access_control::AccessError::NotAdmin => Self::NotAdmin,
+            access_control::AccessError::NotInitialized => Self::NotInitialized,
+            access_control::AccessError::CannotDemoteOwner => Self::CannotDemoteOwner,
+            access_control::AccessError::CannotRevokeLastAdmin => Self::CannotRevokeLastAdmin,
+            access_control::AccessError::InvalidOwnershipTransfer => Self::InvalidOwnershipTransfer,
+            access_control::AccessError::AlreadyOperator => Self::AlreadyOperator,
+            access_control::AccessError::NotOperator => Self::NotOperator,
+        }
+    }
+}
+
+impl From<emergency_pause::errors::PauseError> for Error {
+    fn from(value: emergency_pause::errors::PauseError) -> Self {
+        match value {
+            emergency_pause::errors::PauseError::AlreadyPaused => Self::AlreadyPaused,
+            emergency_pause::errors::PauseError::NotPaused => Self::NotPaused,
+            emergency_pause::errors::PauseError::Unauthorized => Self::Unauthorized,
+            emergency_pause::errors::PauseError::ContractPaused => Self::ContractPaused,
+        }
+    }
+}
+
 fn get_confession_store(env: &Env) -> soroban_sdk::storage::Instance {
     env.storage().instance()
 }
@@ -68,10 +171,7 @@ fn get_confession_store(env: &Env) -> soroban_sdk::storage::Instance {
 fn get_count(env: &Env) -> u64 {
     let storage = env.storage().instance();
     let key = symbol_short!("count");
-    match storage.get(&key) {
-        Some(value) => value,
-        None => 0u64,
-    }
+    storage.get(&key).unwrap_or_default()
 }
 
 fn set_count(env: &Env, count: u64) {
@@ -106,8 +206,7 @@ impl ConfessionAnchor {
     /// - panics with error code 4 (ContractPaused) if contract is paused
     pub fn anchor_confession(env: Env, hash: BytesN<32>, timestamp: u64) -> Symbol {
         // Check if paused — use shared emergency pause module
-        emergency_pause::assert_not_paused(&env)
-            .unwrap_or_else(|err| panic!("{}", err as u32));
+        emergency_pause::assert_not_paused(&env).unwrap_or_else(|err| panic!("{}", err as u32));
 
         let storage = get_confession_store(&env);
 
@@ -129,12 +228,25 @@ impl ConfessionAnchor {
         let current_count = get_count(&env);
         set_count(&env, current_count + 1);
 
+        // Track last anchor timestamp when v2 schema is active.
+        // We only write when the key already exists so we don't spuriously
+        // create it before the owner has run `migrate()`.
+        if env.storage().instance().has(&DataKey::LastAnchorTimestamp) {
+            env.storage()
+                .instance()
+                .set(&DataKey::LastAnchorTimestamp, &timestamp);
+        }
+
         // Emit ConfessionAnchored event:
         // topics: ("confession_anchor", hash)
-        // data: (timestamp, anchor_height)
-        let event_topic = Symbol::new(&env, "confession_anchor");
-        env.events()
-            .publish((event_topic, hash.clone()), (timestamp, anchor_height));
+        // data: (event_version, timestamp, anchor_height)
+        ConfessionAnchoredEvent {
+            hash: hash.clone(),
+            event_version: events::CONFESSION_ANCHORED_EVENT_VERSION,
+            timestamp,
+            anchor_height,
+        }
+        .publish(&env);
 
         symbol_short!("anchored")
     }
@@ -197,6 +309,77 @@ impl ConfessionAnchor {
         errors::ERROR_REGISTRY_VERSION
     }
 
+    /// Returns the currently enforced compatibility policy for upgrades.
+    pub fn get_upgrade_policy(_env: Env) -> UpgradeCompatibilityPolicy {
+        UpgradeCompatibilityPolicy {
+            policy_version: UPGRADE_POLICY_VERSION,
+            current_major: CONTRACT_SEMVER_MAJOR,
+            current_minor: CONTRACT_SEMVER_MINOR,
+            current_patch: CONTRACT_SEMVER_PATCH,
+            min_supported_from_major: MIN_SUPPORTED_FROM_MAJOR,
+            min_supported_from_minor: MIN_SUPPORTED_FROM_MINOR,
+            allow_major_upgrade: false,
+        }
+    }
+
+    /// Read-only compatibility predicate used by deployment automation.
+    pub fn can_upgrade_from(env: Env, from_major: u32, from_minor: u32, from_patch: u32) -> bool {
+        let policy = Self::get_upgrade_policy(env);
+
+        if from_major != CONTRACT_SEMVER_MAJOR {
+            return false;
+        }
+
+        if from_minor > policy.current_minor {
+            return false;
+        }
+
+        if from_minor < policy.min_supported_from_minor {
+            return false;
+        }
+
+        if from_minor == policy.current_minor {
+            return from_patch <= policy.current_patch;
+        }
+
+        true
+    }
+
+    /// Enforced compatibility check that emits an audit event.
+    pub fn assert_upgrade_from(
+        env: Env,
+        from_major: u32,
+        from_minor: u32,
+        from_patch: u32,
+    ) -> Result<(), Error> {
+        let compatible = Self::can_upgrade_from(env.clone(), from_major, from_minor, from_patch);
+
+        VersionCompatibilityCheckedEvent {
+            event_version: events::VERSION_COMPATIBILITY_CHECKED_EVENT_VERSION,
+            nonce: events::bump_nonce(
+                &env,
+                events::EventNonceKey::VersionCompatibilityCheck(
+                    from_major, from_minor, from_patch,
+                ),
+            ),
+            timestamp: env.ledger().timestamp(),
+            from_major,
+            from_minor,
+            from_patch,
+            to_major: CONTRACT_SEMVER_MAJOR,
+            to_minor: CONTRACT_SEMVER_MINOR,
+            to_patch: CONTRACT_SEMVER_PATCH,
+            compatible,
+        }
+        .publish(&env);
+
+        if compatible {
+            Ok(())
+        } else {
+            Err(Error::IncompatibleUpgrade)
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Initialization & Admin Management
     // ─────────────────────────────────────────────────────────────────────────
@@ -204,13 +387,13 @@ impl ConfessionAnchor {
     /// Initialize the contract with an owner. Must be called exactly once after deployment.
     /// Sets up the owner address and initializes the admin set.
     /// Panics if already initialized.
-    pub fn initialize(env: Env, owner: Address) -> Result<(), u32> {
-        access_control::init_owner(&env, &owner).map_err(|err| err as u32)
+    pub fn initialize(env: Env, owner: Address) -> Result<(), Error> {
+        access_control::init_owner(&env, &owner).map_err(Into::into)
     }
 
     /// Get the current owner address.
-    pub fn get_owner(env: Env) -> Result<Address, u32> {
-        access_control::get_owner(&env).map_err(|err| err as u32)
+    pub fn get_owner(env: Env) -> Result<Address, Error> {
+        access_control::get_owner(&env).map_err(Into::into)
     }
 
     /// Check if an address is an admin (not including the owner).
@@ -218,42 +401,140 @@ impl ConfessionAnchor {
         access_control::is_admin(&env, &address)
     }
 
+    /// Check if an address is an operator.
+    pub fn is_operator(env: Env, address: Address) -> bool {
+        access_control::is_operator(&env, &address)
+    }
+
     /// Get count of active admins (excluding the owner).
     pub fn get_admin_count(env: Env) -> u32 {
         access_control::count_admins(&env)
     }
 
+    /// Get count of active operators.
+    pub fn get_operator_count(env: Env) -> u32 {
+        access_control::count_operators(&env)
+    }
+
     /// Grant admin role to an address (owner-only).
-    pub fn grant_admin(env: Env, caller: Address, target: Address) -> Result<(), u32> {
-        access_control::grant_admin(&env, &caller, &target).map_err(|err| err as u32)
+    pub fn grant_admin(env: Env, caller: Address, target: Address) -> Result<(), Error> {
+        access_control::grant_admin(&env, &caller, &target).map_err(Into::into)
     }
 
     /// Revoke admin role from an address (owner-only).
-    pub fn revoke_admin(env: Env, caller: Address, target: Address) -> Result<(), u32> {
-        access_control::revoke_admin(&env, &caller, &target).map_err(|err| err as u32)
+    pub fn revoke_admin(env: Env, caller: Address, target: Address) -> Result<(), Error> {
+        access_control::revoke_admin(&env, &caller, &target).map_err(Into::into)
     }
 
     /// Transfer ownership to a new owner (current owner-only).
-    pub fn transfer_owner(env: Env, caller: Address, new_owner: Address) -> Result<(), u32> {
-        access_control::transfer_ownership(&env, &caller, &new_owner)
-            .map_err(|err| err as u32)
+    pub fn transfer_owner(env: Env, caller: Address, new_owner: Address) -> Result<(), Error> {
+        access_control::transfer_ownership(&env, &caller, &new_owner).map_err(Into::into)
+    }
+
+    /// Grant operator role to an address (owner or admin).
+    pub fn grant_operator(env: Env, caller: Address, target: Address) -> Result<(), Error> {
+        access_control::grant_operator(&env, &caller, &target).map_err(Into::into)
+    }
+
+    /// Revoke operator role from an address (owner or admin).
+    pub fn revoke_operator(env: Env, caller: Address, target: Address) -> Result<(), Error> {
+        access_control::revoke_operator(&env, &caller, &target).map_err(Into::into)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Schema migration
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Apply all pending schema migrations and return the new schema version.
+    ///
+    /// **Idempotent** — calling this multiple times is safe; it is a no-op
+    /// when storage is already at `ANCHOR_SCHEMA_VERSION_CURRENT`.
+    ///
+    /// Caller must be the contract owner.
+    ///
+    /// ## v1 → v2
+    /// Introduces `LastAnchorTimestamp` (u64): the timestamp of the most
+    /// recent successful anchor.  Pre-migration anchors are not back-filled —
+    /// the value starts at 0 and is updated from the first post-migration
+    /// `anchor_confession` call.
+    ///
+    /// ## Rollback
+    /// Schema bumps are purely additive.  The v1 WASM simply ignores any
+    /// `SchemaVersion` or `LastAnchorTimestamp` keys left by the migration.
+    pub fn migrate(env: Env, caller: Address) -> Result<u32, Error> {
+        access_control::require_owner(&env, &caller).map_err(Error::from)?;
+
+        let current_version = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+            .unwrap_or(ANCHOR_SCHEMA_VERSION_INITIAL);
+
+        if current_version >= ANCHOR_SCHEMA_VERSION_CURRENT {
+            return Ok(current_version);
+        }
+
+        // v1 → v2: initialise LastAnchorTimestamp to 0 if not already present.
+        if current_version < 2 && !env.storage().instance().has(&DataKey::LastAnchorTimestamp) {
+            env.storage()
+                .instance()
+                .set(&DataKey::LastAnchorTimestamp, &0_u64);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &ANCHOR_SCHEMA_VERSION_CURRENT);
+
+        Ok(ANCHOR_SCHEMA_VERSION_CURRENT)
+    }
+
+    /// Return the current schema version stored on-chain.
+    /// Returns `ANCHOR_SCHEMA_VERSION_INITIAL` for pre-versioning deployments.
+    pub fn schema_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SchemaVersion)
+            .unwrap_or(ANCHOR_SCHEMA_VERSION_INITIAL)
+    }
+
+    /// Return the timestamp of the last successfully anchored confession since
+    /// schema v2 migration was applied.  Returns 0 on pre-v2 contracts.
+    pub fn last_anchor_timestamp(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get::<_, u64>(&DataKey::LastAnchorTimestamp)
+            .unwrap_or(0_u64)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Pause/Resume Management
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Pause the contract (owner-only). Blocks anchor_confession writes.
+    /// Pause the contract (owner/admin). Blocks anchor_confession writes.
     /// Read operations (verify, count) remain available.
-    pub fn pause(env: Env, caller: Address, reason: String) -> Result<(), u32> {
-        access_control::require_owner(&env, &caller).map_err(|err| err as u32)?;
-        emergency_pause::pause(&env, reason).map_err(|err| err as u32)
+    pub fn pause(env: Env, caller: Address, reason: String) -> Result<(), Error> {
+        access_control::require_admin_or_owner(&env, &caller).map_err(Error::from)?;
+
+        if emergency_pause::is_paused(&env) {
+            return Err(Error::AlreadyPaused);
+        }
+
+        emergency_pause::set_paused_internal(&env, true);
+        emergency_pause::events::emit_paused(&env, &caller, reason);
+        Ok(())
     }
 
-    /// Unpause the contract (owner-only).
-    pub fn unpause(env: Env, caller: Address, reason: String) -> Result<(), u32> {
-        access_control::require_owner(&env, &caller).map_err(|err| err as u32)?;
-        emergency_pause::unpause(&env, reason).map_err(|err| err as u32)
+    /// Unpause the contract (owner/admin).
+    pub fn unpause(env: Env, caller: Address, reason: String) -> Result<(), Error> {
+        access_control::require_admin_or_owner(&env, &caller).map_err(Error::from)?;
+
+        if !emergency_pause::is_paused(&env) {
+            return Err(Error::NotPaused);
+        }
+
+        emergency_pause::set_paused_internal(&env, false);
+        emergency_pause::events::emit_unpaused(&env, &caller, reason);
+        Ok(())
     }
 
     /// Check if the contract is paused.
@@ -316,7 +597,7 @@ impl ConfessionAnchor {
 mod test {
     use super::*;
     use soroban_sdk::{
-        testutils::{Events, Ledger, LedgerInfo},
+        testutils::{Address as _, Events, Ledger, LedgerInfo},
         BytesN, Env, IntoVal, String as SorobanString,
     };
 
@@ -326,7 +607,7 @@ mod test {
     fn new_client() -> (Env, ConfessionAnchorClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, ConfessionAnchor);
+        let contract_id = env.register(ConfessionAnchor, ());
         let client = ConfessionAnchorClient::new(&env, &contract_id);
         (env, client)
     }
@@ -532,14 +813,19 @@ mod test {
         assert_eq!(events.len(), 1);
 
         // events().all() returns Vec<(ContractId, Topics, Data)>
-        // Data is (timestamp: u64, anchor_height: u32) as encoded Val.
+        // Data is (event_version: u32, timestamp: u64, anchor_height: u32) as encoded Val.
         let (_contract_id, _topics, data) = events.first().unwrap();
 
-        // Decode the data tuple — Soroban encodes as a two-element Vec<Val>.
-        let decoded: (u64, u32) = data.into_val(&env);
-        assert_eq!(decoded.0, ts, "event data must carry the input timestamp");
+        // Decode the data tuple — Soroban encodes as a Vec<Val>.
+        let decoded: (u32, u64, u32) = data.into_val(&env);
         assert_eq!(
-            decoded.1, 77,
+            decoded.0,
+            events::EVENT_SCHEMA_VERSION,
+            "event data must carry an explicit schema discriminator"
+        );
+        assert_eq!(decoded.1, ts, "event data must carry the input timestamp");
+        assert_eq!(
+            decoded.2, 77,
             "event data must carry the ledger sequence as anchor_height"
         );
     }
@@ -841,12 +1127,14 @@ mod test {
 
         assert_eq!(info.event_schema_version, events::EVENT_SCHEMA_VERSION);
         assert_eq!(info.error_registry_version, errors::ERROR_REGISTRY_VERSION);
-        assert_eq!(info.capabilities.len(), 5);
+        assert_eq!(info.capabilities.len(), 7);
         assert_eq!(info.capabilities.get(0), Some(CAPABILITY_ANCHOR_V1));
         assert_eq!(info.capabilities.get(1), Some(CAPABILITY_VERIFY_V1));
         assert_eq!(info.capabilities.get(2), Some(CAPABILITY_COUNT_V1));
         assert_eq!(info.capabilities.get(3), Some(CAPABILITY_EVENT_V1));
         assert_eq!(info.capabilities.get(4), Some(CAPABILITY_META_V1));
+        assert_eq!(info.capabilities.get(5), Some(CAPABILITY_ADMIN_V1));
+        assert_eq!(info.capabilities.get(6), Some(CAPABILITY_PAUSE_V1));
     }
 
     #[test]
@@ -870,5 +1158,159 @@ mod test {
             client.get_error_registry_version(),
             errors::ERROR_REGISTRY_VERSION
         );
+    }
+
+    // ── Group I: Role permission matrix ─────────────────────────────────────
+
+    #[test]
+    fn owner_admin_operator_permission_matrix_for_admin_actions() {
+        let (env, client) = new_client();
+        let owner = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let operator = Address::generate(&env);
+        let outsider = Address::generate(&env);
+
+        client.initialize(&owner);
+
+        // Owner can grant admin; admin can grant operator.
+        client.grant_admin(&owner, &admin);
+        client.grant_operator(&admin, &operator);
+        assert!(client.is_admin(&admin));
+        assert!(client.is_operator(&operator));
+
+        // Owner-only: admin management and ownership transfer.
+        assert_eq!(
+            client.try_grant_admin(&admin, &outsider),
+            Err(Ok(Error::NotOwner))
+        );
+        assert_eq!(
+            client.try_transfer_owner(&admin, &outsider),
+            Err(Ok(Error::NotOwner))
+        );
+
+        // Owner/admin only: pause and unpause.
+        let pause_reason = SorobanString::from_str(&env, "maintenance");
+        client.pause(&admin, &pause_reason);
+        client.unpause(&owner, &pause_reason);
+
+        // Operator cannot execute owner/admin-only actions.
+        assert_eq!(
+            client.try_pause(&operator, &pause_reason),
+            Err(Ok(Error::NotAuthorized))
+        );
+        assert_eq!(
+            client.try_grant_operator(&operator, &outsider),
+            Err(Ok(Error::NotAuthorized))
+        );
+        assert_eq!(
+            client.try_revoke_admin(&operator, &admin),
+            Err(Ok(Error::NotOwner))
+        );
+
+        // Outsider cannot run privileged actions.
+        assert_eq!(
+            client.try_pause(&outsider, &pause_reason),
+            Err(Ok(Error::NotAuthorized))
+        );
+    }
+
+    #[test]
+    fn operator_role_requires_admin_or_owner_assignment() {
+        let (env, client) = new_client();
+        let owner = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        let operator = Address::generate(&env);
+
+        client.initialize(&owner);
+
+        assert_eq!(
+            client.try_grant_operator(&outsider, &operator),
+            Err(Ok(Error::NotAuthorized))
+        );
+        client.grant_operator(&owner, &operator);
+        assert_eq!(
+            client.try_grant_operator(&owner, &operator),
+            Err(Ok(Error::AlreadyOperator))
+        );
+        client.revoke_operator(&owner, &operator);
+        assert_eq!(
+            client.try_revoke_operator(&owner, &operator),
+            Err(Ok(Error::NotOperator))
+        );
+    }
+
+    // ── Group J: Upgrade compatibility policy ───────────────────────────────
+
+    #[test]
+    fn upgrade_policy_is_discoverable() {
+        let (_env, client) = new_client();
+        let policy = client.get_upgrade_policy();
+
+        assert_eq!(policy.policy_version, UPGRADE_POLICY_VERSION);
+        assert_eq!(policy.current_major, CONTRACT_SEMVER_MAJOR);
+        assert_eq!(policy.current_minor, CONTRACT_SEMVER_MINOR);
+        assert_eq!(policy.current_patch, CONTRACT_SEMVER_PATCH);
+        assert_eq!(policy.min_supported_from_major, MIN_SUPPORTED_FROM_MAJOR);
+        assert_eq!(policy.min_supported_from_minor, MIN_SUPPORTED_FROM_MINOR);
+        assert!(!policy.allow_major_upgrade);
+    }
+
+    #[test]
+    fn version_transition_matrix_enforces_upgrade_constraints() {
+        let (_env, client) = new_client();
+
+        assert!(client.can_upgrade_from(&CONTRACT_SEMVER_MAJOR, &CONTRACT_SEMVER_MINOR, &0));
+        assert!(client.can_upgrade_from(&CONTRACT_SEMVER_MAJOR, &MIN_SUPPORTED_FROM_MINOR, &0));
+        assert!(!client.can_upgrade_from(&(CONTRACT_SEMVER_MAJOR + 1), &0, &0));
+        assert!(!client.can_upgrade_from(&(CONTRACT_SEMVER_MAJOR - 1), &0, &0));
+        assert!(!client.can_upgrade_from(&CONTRACT_SEMVER_MAJOR, &(CONTRACT_SEMVER_MINOR + 1), &0));
+        assert!(!client.can_upgrade_from(
+            &CONTRACT_SEMVER_MAJOR,
+            &CONTRACT_SEMVER_MINOR,
+            &(CONTRACT_SEMVER_PATCH + 1)
+        ));
+    }
+
+    #[test]
+    fn assert_upgrade_from_rejects_incompatible_versions() {
+        let (_env, client) = new_client();
+
+        assert_eq!(
+            client.assert_upgrade_from(&CONTRACT_SEMVER_MAJOR, &CONTRACT_SEMVER_MINOR, &0),
+            ()
+        );
+        assert_eq!(
+            client.try_assert_upgrade_from(&(CONTRACT_SEMVER_MAJOR + 1), &0, &0),
+            Err(Ok(Error::IncompatibleUpgrade))
+        );
+    }
+
+    #[test]
+    fn pause_reason_exact_limit_succeeds() {
+        let (env, client) = new_client();
+        let owner = Address::generate(&env);
+        let reason = SorobanString::from_str(
+            &env,
+            &"r".repeat(emergency_pause::events::MAX_PAUSE_REASON_LEN as usize),
+        );
+
+        client.initialize(&owner);
+
+        client.pause(&owner, &reason);
+    }
+
+    #[test]
+    #[should_panic(expected = "pause reason too long")]
+    fn pause_reason_limit_plus_one_rejected() {
+        let (env, client) = new_client();
+        let owner = Address::generate(&env);
+        let reason = SorobanString::from_str(
+            &env,
+            &"r".repeat((emergency_pause::events::MAX_PAUSE_REASON_LEN + 1) as usize),
+        );
+
+        client.initialize(&owner);
+
+        client.pause(&owner, &reason);
     }
 }

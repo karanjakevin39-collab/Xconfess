@@ -3,6 +3,7 @@ import {
   REACTION_EMOJI_MAP,
 } from "@/app/lib/constants/reactions";
 import { getApiBaseUrl } from "@/app/lib/config";
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
 
 const BASE_API_URL = getApiBaseUrl();
 
@@ -14,40 +15,29 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
+  let correlationId: string | undefined;
   try {
     const { id } = await context.params;
+    correlationId = request.headers.get("X-Correlation-ID") ?? undefined;
     const body = await request.json();
     const { type } = body;
 
     // Validate reaction type using shared constants
     if (!type || !isValidReactionType(type)) {
-      return new Response(
-        JSON.stringify({
-          error: "Invalid reaction type",
-          message: "Reaction type must be 'like' or 'love'",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return createApiErrorResponse({
+        error: "Invalid reaction type",
+        message: "Reaction type must be 'like' or 'love'",
+      }, { status: 400 });
     }
 
     // Get anonymousUserId from request headers (set by middleware or client)
     const anonymousUserId = request.headers.get("x-anonymous-user-id");
 
     if (!anonymousUserId) {
-      return new Response(
-        JSON.stringify({
-          error: "Missing anonymous user ID",
-          message:
-            "Anonymous user ID is required. Please ensure you are logged in.",
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return createApiErrorResponse({
+        error: "Missing anonymous user ID",
+        message: "Anonymous user ID is required. Please ensure you are logged in.",
+      }, { status: 401 });
     }
 
     // Map frontend reaction type to backend emoji representation
@@ -71,31 +61,13 @@ export async function POST(
     });
 
     if (!reactionRes.ok) {
-      const errorText = await reactionRes.text();
-      let errorMessage = "Failed to persist reaction";
-
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.message || errorMessage;
-      } catch {
-        // Use default error message if response is not JSON
-      }
-
-      console.error(
-        `Reaction API error (${reactionRes.status}):`,
-        errorMessage
-      );
-
-      return new Response(
-        JSON.stringify({
-          error: "Failed to persist reaction",
-          message: errorMessage,
-        }),
-        {
-          status: reactionRes.status,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      const errorData = await reactionRes.json().catch(() => ({}));
+      return createApiErrorResponse(errorData, {
+        status: reactionRes.status,
+        fallbackMessage: "Failed to persist reaction",
+        route: "POST /api/confessions/[id]/react",
+        correlationId
+      });
     }
 
     // Fetch updated confession to return fresh reaction counts
@@ -158,17 +130,11 @@ export async function POST(
       }
     );
   } catch (err) {
-    console.error("Error processing reaction:", err);
-
-    return new Response(
-      JSON.stringify({
-        error: "Internal server error",
-        message: "Failed to process reaction. Please try again.",
-      }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+    return createApiErrorResponse(err, {
+      status: 500,
+      route: "POST /api/confessions/[id]/react",
+      correlationId
+    });
   }
 }
+

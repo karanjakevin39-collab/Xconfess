@@ -37,7 +37,7 @@ export class ModerationNoteTemplate {
   @Column({ default: true })
   isActive: boolean;
 
-  @Column({ name: 'created_by', nullable: true })
+  @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById: number | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })

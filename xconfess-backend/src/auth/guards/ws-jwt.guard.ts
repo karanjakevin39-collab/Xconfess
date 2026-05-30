@@ -4,6 +4,7 @@ import {
   ExecutionContext,
   UnauthorizedException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Socket } from 'socket.io';
@@ -15,7 +16,7 @@ export class WsJwtGuard implements CanActivate {
 
   constructor(
     private jwtService: JwtService,
-    private userService: UserService,
+    @Optional() private userService?: UserService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -42,6 +43,10 @@ export class WsJwtGuard implements CanActivate {
 
       // Try to fetch user (optional) to populate role or other fields
       try {
+        if (!this.userService) {
+          return true;
+        }
+
         const user = await this.userService.findById(Number(payload.sub));
         if (user) {
           client.data.user = {

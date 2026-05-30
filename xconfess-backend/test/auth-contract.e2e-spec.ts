@@ -5,11 +5,13 @@ import { AppModule } from './../src/app.module';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../src/user/entities/user.entity';
+import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 
 describe('Auth Contract (e2e)', () => {
   let app: INestApplication;
   let userRepository: Repository<User>;
+  let jwtService: JwtService;
   let testUser: User;
 
   beforeAll(async () => {
@@ -21,6 +23,7 @@ describe('Auth Contract (e2e)', () => {
     await app.init();
 
     userRepository = app.get(getRepositoryToken(User));
+    jwtService = app.get(JwtService);
   });
 
   beforeEach(async () => {
@@ -89,6 +92,24 @@ describe('Auth Contract (e2e)', () => {
         })
         .expect(401);
     });
+
+    it('should expose CORS allow-origin and credentials for the frontend origin', async () => {
+      const response = await request(app.getHttpServer())
+        .options('/auth/login')
+        .set('Origin', 'http://localhost:3000')
+        .set('Access-Control-Request-Method', 'POST')
+        .set('Access-Control-Request-Headers', 'content-type')
+        .expect((res) => {
+          if (!['200', '204'].includes(String(res.status))) {
+            throw new Error(`Unexpected preflight status: ${res.status}`);
+          }
+        });
+
+      expect(response.headers['access-control-allow-origin']).toBe(
+        'http://localhost:3000',
+      );
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+    });
   });
 
   describe('GET /auth/me', () => {
@@ -127,6 +148,63 @@ describe('Auth Contract (e2e)', () => {
         .get('/auth/me')
         .set('Authorization', 'Bearer invalid-token')
         .expect(401);
+    });
+  });
+
+  describe('GET /auth/session', () => {
+    let accessToken: string;
+
+    beforeEach(async () => {
+      const loginResponse = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: 'test@example.com',
+          password: 'testpassword',
+        });
+
+      accessToken = loginResponse.body.access_token;
+    });
+
+    it('should return the current session with valid token', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      expect(response.body).toHaveProperty('id');
+      expect(response.body).toHaveProperty('username', 'testuser');
+      expect(response.body).toHaveProperty('email', 'test@example.com');
+      expect(response.body).toHaveProperty('is_active', true);
+      expect(response.body).not.toHaveProperty('password');
+    });
+
+    it('should return AUTH_TOKEN_INVALID for an invalid token', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Authorization', 'Bearer invalid-token')
+        .expect(401);
+
+      expect(response.body.code).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('should return AUTH_SESSION_EXPIRED for an expired token', async () => {
+      const expiredToken = jwtService.sign(
+        {
+          email: 'test@example.com',
+          sub: testUser.id,
+          username: 'testuser',
+          role: 'USER',
+          scopes: [],
+        },
+        { expiresIn: '-1s' },
+      );
+
+      const response = await request(app.getHttpServer())
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${expiredToken}`)
+        .expect(401);
+
+      expect(response.body.code).toBe('AUTH_SESSION_EXPIRED');
     });
   });
 

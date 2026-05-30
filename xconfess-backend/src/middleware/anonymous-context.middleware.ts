@@ -17,7 +17,11 @@ export class AnonymousContextMiddleware implements NestMiddleware {
 
   async use(req: Request, res: Response, next: NextFunction) {
     // Only add anonymous context for authenticated users
-    const authReq = req as Request & { user?: RequestUser };
+    const authReq = req as Request & { 
+      user?: RequestUser;
+      anonymousContextId?: string;
+      anonymousUser?: any;
+    };
     if (authReq.user) {
       try {
         // Get or create anonymous context for this user session
@@ -30,13 +34,13 @@ export class AnonymousContextMiddleware implements NestMiddleware {
         res.setHeader(this.ANONYMOUS_CONTEXT_HEADER, anonymousContextId);
 
         // Store the anonymous context ID in the request object for later use
-        req['anonymousContextId'] = anonymousContextId;
-        req['anonymousUser'] = anonymousUser;
+        authReq['anonymousContextId'] = anonymousContextId;
+        authReq['anonymousUser'] = anonymousUser;
       } catch (error) {
         // Fallback: generate a temporary context ID if service fails
         const fallbackId = this.generateAnonymousContextId();
         res.setHeader(this.ANONYMOUS_CONTEXT_HEADER, fallbackId);
-        req['anonymousContextId'] = fallbackId;
+        authReq['anonymousContextId'] = fallbackId;
       }
     }
 

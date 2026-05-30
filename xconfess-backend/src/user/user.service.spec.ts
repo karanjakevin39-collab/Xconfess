@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { EmailService } from '../email/email.service';
 import { CryptoUtil } from '../common/crypto.util';
+import { ConfigService } from '@nestjs/config';
 
 jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
@@ -40,10 +41,18 @@ describe('UserService', () => {
       dataProcessingConsent: true,
     },
     isNotificationEnabled: jest.fn(),
-    isDiscoverable: jest.fn().mockReturnValue(true),
-    canReceiveReplies: jest.fn().mockReturnValue(true),
-    shouldShowReactions: jest.fn().mockReturnValue(true),
-    hasDataProcessingConsent: jest.fn().mockReturnValue(true),
+    isDiscoverable: jest.fn(function (this: User) {
+      return this.privacySettings?.isDiscoverable !== false;
+    }),
+    canReceiveReplies: jest.fn(function (this: User) {
+      return this.privacySettings?.canReceiveReplies !== false;
+    }),
+    shouldShowReactions: jest.fn(function (this: User) {
+      return this.privacySettings?.showReactions !== false;
+    }),
+    hasDataProcessingConsent: jest.fn(function (this: User) {
+      return this.privacySettings?.dataProcessingConsent !== false;
+    }),
     getEmail: jest.fn(),
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -71,6 +80,10 @@ describe('UserService', () => {
         {
           provide: EmailService,
           useValue: mockEmailService,
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key: string, fallback?: unknown) => fallback ?? '') },
         },
       ],
     }).compile();
@@ -145,11 +158,13 @@ describe('UserService', () => {
     });
   });
 
-// findByResetToken was removed from service, so removing tests or skipping them
+  // findByResetToken was removed from service, so removing tests or skipping them
 
   describe('updatePassword', () => {
     it('should successfully update password and clear reset token fields', async () => {
-      (bcrypt.hash as jest.Mock).mockResolvedValue('new-hashed-password' as never);
+      (bcrypt.hash as jest.Mock).mockResolvedValue(
+        'new-hashed-password' as never,
+      );
       mockRepository.update.mockResolvedValue({ affected: 1 });
 
       await service.updatePassword(1, 'newpassword123');
@@ -159,7 +174,9 @@ describe('UserService', () => {
     });
 
     it('should throw InternalServerErrorException on database error', async () => {
-      (bcrypt.hash as jest.Mock).mockResolvedValue('new-hashed-password' as never);
+      (bcrypt.hash as jest.Mock).mockResolvedValue(
+        'new-hashed-password' as never,
+      );
       mockRepository.save.mockRejectedValue(new Error('Database error'));
 
       await expect(service.updatePassword(1, 'newpassword123')).rejects.toThrow(
@@ -286,7 +303,9 @@ describe('UserService', () => {
 
     it('should throw InternalServerErrorException on password hashing error', async () => {
       mockRepository.findOne.mockResolvedValue(null);
-      (bcrypt.hash as jest.Mock).mockRejectedValue(new Error('Hashing error') as never);
+      (bcrypt.hash as jest.Mock).mockRejectedValue(
+        new Error('Hashing error') as never,
+      );
 
       await expect(
         service.create(

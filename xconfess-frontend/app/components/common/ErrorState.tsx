@@ -36,19 +36,19 @@ const ErrorState: React.FC<ErrorStateProps> = ({
     ? 'min-h-screen flex items-center justify-center'
     : 'py-8 px-4';
   const isWarning = variant === "warning";
-  const accentText = isWarning ? "text-amber-400" : "text-red-500";
-  const subtitleText = isWarning ? "text-amber-200" : "text-gray-300";
-  const iconBg = isWarning ? "bg-amber-900/20" : "bg-red-900/20";
-  const iconColor = isWarning ? "text-amber-400" : "text-red-500";
+  const accentText = isWarning ? "text-[var(--foreground)]" : "text-red-700";
+  const subtitleText = isWarning ? "text-[var(--secondary)]" : "text-red-600";
+  const iconBg = isWarning ? "bg-[var(--accent-soft)]" : "bg-red-50";
+  const iconColor = isWarning ? "text-[var(--primary-deep)]" : "text-red-600";
 
   return (
     <div className={containerClass}>
-      <div className="text-center max-w-md">
+      <div className="luxury-panel mx-auto max-w-md rounded-[28px] px-6 py-8 text-center">
         {showIcon && (
-          <div className="flex justify-center mb-4">
-            <div className={`w-16 h-16 ${iconBg} rounded-full flex items-center justify-center`}>
+          <div className="mb-4 flex justify-center">
+            <div className={`flex h-16 w-16 items-center justify-center rounded-full ${iconBg}`}>
               <svg
-                className={`w-8 h-8 ${iconColor}`}
+                className={`h-8 w-8 ${iconColor}`}
                 fill="currentColor"
                 viewBox="0 0 20 20"
               >
@@ -70,13 +70,13 @@ const ErrorState: React.FC<ErrorStateProps> = ({
           </div>
         )}
 
-        <h3 className={`text-lg font-semibold ${accentText} mb-2`}>{title}</h3>
+        <h3 className={`mb-2 font-editorial text-3xl ${accentText}`}>{title}</h3>
 
         {description && (
-          <p className="text-gray-400 text-sm mb-2">{description}</p>
+          <p className="mb-2 text-sm leading-7 text-[var(--secondary)]">{description}</p>
         )}
 
-        <p className={`${subtitleText} text-sm mb-6`}>{error}</p>
+        <p className={`mb-6 text-sm leading-7 ${subtitleText}`}>{error}</p>
 
         <div className="flex flex-wrap justify-center gap-2">
           {showRetry && onRetry && (
@@ -86,7 +86,7 @@ const ErrorState: React.FC<ErrorStateProps> = ({
             <button
               type="button"
               onClick={onPrimaryAction}
-              className="px-4 py-2 rounded-md bg-zinc-800 text-zinc-100 hover:bg-zinc-700 transition-colors text-sm font-medium"
+              className="rounded-full bg-[linear-gradient(135deg,var(--primary),var(--primary-deep))] px-4 py-2 text-sm font-medium text-white shadow-[0_18px_40px_-22px_rgba(88,105,125,0.55)] transition-colors hover:brightness-105"
             >
               {primaryActionLabel}
             </button>
@@ -95,7 +95,7 @@ const ErrorState: React.FC<ErrorStateProps> = ({
             <button
               type="button"
               onClick={onSecondaryAction}
-              className="px-4 py-2 rounded-md border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors text-sm font-medium"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--secondary)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--foreground)]"
             >
               {secondaryActionLabel}
             </button>

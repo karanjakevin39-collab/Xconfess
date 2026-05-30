@@ -41,11 +41,11 @@ Use this checklist before any staging or production release that affects the bac
 ### Contract Readiness
 
 - [ ] Confirm all automated contract gates passed in CI (check, build, test for wasm32 target).
-- [ ] Review `maintainer/issues/125-docs-contract-release-and-upgrade-runbook.md` before any contract release or upgrade.
+- [ ] Review `docs/contract-release-and-upgrade-runbook.md` before any contract release or upgrade.
 - [ ] Optionally run local contract tests for deep validation: `./scripts/test-contracts.sh --verbose`
 - [ ] Build the contract artifacts locally to verify: `./scripts/contracts-release.sh build`
 - [ ] Verify the generated artifact manifest exists at `deployments/contract-wasm-manifest.json`.
-- [ ] Confirm the manifest SHA-256 hashes match the artifacts being promoted.
+- [ ] Confirm the manifest SHA-256 hashes match the artifacts being promoted using `docs/contract-release-and-upgrade-runbook.md`.
 - [ ] Confirm the target network, deployer identity, and funding state before deployment.
 - [ ] Verify any backend or frontend config that depends on new contract IDs is ready to update in the same release window.
 
@@ -84,7 +84,7 @@ Use this checklist before any staging or production release that affects the bac
 ### Contract Verification
 
 - [ ] If contracts were deployed, confirm deploy commands completed successfully and contract IDs were recorded.
-- [ ] Run contract smoke checks using the promoted IDs and target network.
+- [ ] Run the contract post-deployment verification checklist from `docs/contract-release-and-upgrade-runbook.md`.
 - [ ] Verify downstream consumers can read the expected on-chain data or events.
 - [ ] Confirm no unexpected error codes or payload-shape changes surfaced during verification.
 
@@ -92,8 +92,8 @@ Use this checklist before any staging or production release that affects the bac
 
 - [ ] Define the exact rollback trigger for this release before starting deployment.
 - [ ] Keep the last known-good backend artifact, frontend artifact, and contract metadata available.
-- [ ] Confirm which changes are reversible immediately and which require operator intervention.
-- [ ] If a contract change is not directly reversible, document the mitigation path before release.
+- [ ] Confirm which changes (including database migrations, queue configuration, and contract updates) are reversible immediately and which require operator intervention.
+- [ ] If a change (such as a contract update or database migration) is not directly reversible, document the mitigation path before release.
 - [ ] Prepare the communication message to send if rollback or release pause is required.
 
 ## Post-Release Follow-Up
@@ -108,4 +108,5 @@ Use this checklist before any staging or production release that affects the bac
 - `README.md`
 - `DEPLOYMENT_CHECKLIST.md`
 - `docs/SOROBAN_SETUP.md`
-- `maintainer/issues/125-docs-contract-release-and-upgrade-runbook.md`
+- `docs/contract-release-and-upgrade-runbook.md`
+- `deployments/README.md`

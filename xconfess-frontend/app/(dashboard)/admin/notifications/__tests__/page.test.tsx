@@ -10,6 +10,11 @@ import NotificationsPage from '../page';
 import { adminApi } from '@/app/lib/api/admin';
 import type { FailedJobsResponse } from '@/app/lib/types/notification-jobs';
 
+const mockToast = {
+  success: jest.fn(),
+  error: jest.fn(),
+};
+
 // Mock the admin API
 jest.mock('@/app/lib/api/admin', () => ({
   adminApi: {
@@ -21,6 +26,10 @@ jest.mock('@/app/lib/api/admin', () => ({
 // Mock ErrorBoundary to simplify testing
 jest.mock('@/app/components/common/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+jest.mock('@/app/components/common/Toast', () => ({
+  useGlobalToast: () => mockToast,
 }));
 
 // Mock ConfirmDialog
@@ -45,6 +54,33 @@ jest.mock('@/app/components/admin/ConfirmDialog', () => ({
       </div>
     ) : null,
 }));
+
+// Mock useDLQFilterState so filter state is fully controlled in tests.
+// URL mechanics (router.push, searchParams) are covered by the hook's own unit tests.
+jest.mock('@/app/lib/hooks/useDLQFilterState', () => ({
+  useDLQFilterState: jest.fn(),
+}));
+
+import { useDLQFilterState } from '@/app/lib/hooks/useDLQFilterState';
+
+const mockSetPage = jest.fn();
+const mockSetStatusFilter = jest.fn();
+const mockSetStartDate = jest.fn();
+const mockSetEndDate = jest.fn();
+const mockSetMinRetries = jest.fn();
+
+const defaultFilterMock = {
+  page: 1,
+  statusFilter: 'failed' as const,
+  startDate: '',
+  endDate: '',
+  minRetries: undefined,
+  setPage: mockSetPage,
+  setStatusFilter: mockSetStatusFilter,
+  setStartDate: mockSetStartDate,
+  setEndDate: mockSetEndDate,
+  setMinRetries: mockSetMinRetries,
+};
 
 const mockFailedJobs: FailedJobsResponse = {
   jobs: [
@@ -94,6 +130,7 @@ function renderWithProviders(ui: React.ReactElement) {
 describe('NotificationsPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (useDLQFilterState as jest.Mock).mockReturnValue(defaultFilterMock);
   });
 
   describe('Rendering', () => {
@@ -189,7 +226,7 @@ describe('NotificationsPage', () => {
       });
     });
 
-    it('should update filters when user changes status', async () => {
+    it('should call setStatusFilter when user changes status', async () => {
       (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue(mockFailedJobs);
 
       renderWithProviders(<NotificationsPage />);
@@ -201,18 +238,10 @@ describe('NotificationsPage', () => {
       const statusSelect = screen.getByLabelText('Status');
       fireEvent.change(statusSelect, { target: { value: 'all' } });
 
-      await waitFor(() => {
-        expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledWith(
-          expect.objectContaining({
-            status: 'all',
-            page: 1,
-          })
-        );
-      });
+      expect(mockSetStatusFilter).toHaveBeenCalledWith('all');
     });
 
-    it('should debounce date filter changes', async () => {
-      jest.useFakeTimers();
+    it('should call setStartDate when date input changes', async () => {
       (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue(mockFailedJobs);
 
       renderWithProviders(<NotificationsPage />);
@@ -224,27 +253,47 @@ describe('NotificationsPage', () => {
       const startDateInput = screen.getByLabelText('Start Date');
       fireEvent.change(startDateInput, { target: { value: '2024-02-01' } });
 
-      // Should not call immediately
-      expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledTimes(1);
-
-      // Fast-forward time
-      jest.advanceTimersByTime(500);
-
-      await waitFor(() => {
-        expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledWith(
-          expect.objectContaining({
-            startDate: '2024-02-01',
-          })
-        );
-      });
-
-      jest.useRealTimers();
+      expect(mockSetStartDate).toHaveBeenCalledWith('2024-02-01');
     });
 
-    it('should reset to page 1 when filters change', async () => {
+    it('should call setEndDate when end date input changes', async () => {
+      (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue(mockFailedJobs);
+
+      renderWithProviders(<NotificationsPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/job-123/)).toBeInTheDocument();
+      });
+
+      const endDateInput = screen.getByLabelText('End Date');
+      fireEvent.change(endDateInput, { target: { value: '2024-02-28' } });
+
+      expect(mockSetEndDate).toHaveBeenCalledWith('2024-02-28');
+    });
+
+    it('should call setMinRetries when min retries input changes', async () => {
+      (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue(mockFailedJobs);
+
+      renderWithProviders(<NotificationsPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/job-123/)).toBeInTheDocument();
+      });
+
+      const minRetriesInput = screen.getByLabelText('Min Retries');
+      fireEvent.change(minRetriesInput, { target: { value: '3' } });
+
+      expect(mockSetMinRetries).toHaveBeenCalledWith(3);
+    });
+
+    it('should reset to page 1 when status filter changes', async () => {
       (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue({
         ...mockFailedJobs,
         total: 50,
+      });
+      (useDLQFilterState as jest.Mock).mockReturnValue({
+        ...defaultFilterMock,
+        page: 2,
       });
 
       renderWithProviders(<NotificationsPage />);
@@ -253,26 +302,12 @@ describe('NotificationsPage', () => {
         expect(screen.getByText(/job-123/)).toBeInTheDocument();
       });
 
-      // Go to page 2
-      const nextButton = screen.getByText('Next');
-      fireEvent.click(nextButton);
-
-      await waitFor(() => {
-        expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledWith(
-          expect.objectContaining({ page: 2 })
-        );
-      });
-
-      // Change filter
       const statusSelect = screen.getByLabelText('Status');
       fireEvent.change(statusSelect, { target: { value: 'all' } });
 
-      // Should reset to page 1
-      await waitFor(() => {
-        expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledWith(
-          expect.objectContaining({ page: 1, status: 'all' })
-        );
-      });
+      // setStatusFilter in useDLQFilterState automatically resets page in the URL;
+      // here we verify the setter is called with the new value
+      expect(mockSetStatusFilter).toHaveBeenCalledWith('all');
     });
   });
 
@@ -292,7 +327,7 @@ describe('NotificationsPage', () => {
       });
     });
 
-    it('should navigate to next page when Next button clicked', async () => {
+    it('should call setPage with next page number when Next button clicked', async () => {
       (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue({
         ...mockFailedJobs,
         total: 50,
@@ -307,11 +342,7 @@ describe('NotificationsPage', () => {
       const nextButton = screen.getByText('Next');
       fireEvent.click(nextButton);
 
-      await waitFor(() => {
-        expect(adminApi.getFailedNotificationJobs).toHaveBeenCalledWith(
-          expect.objectContaining({ page: 2 })
-        );
-      });
+      expect(mockSetPage).toHaveBeenCalledWith(2);
     });
 
     it('should disable Previous button on first page', async () => {
@@ -331,8 +362,11 @@ describe('NotificationsPage', () => {
     it('should disable Next button on last page', async () => {
       (adminApi.getFailedNotificationJobs as jest.Mock).mockResolvedValue({
         ...mockFailedJobs,
-        page: 3,
         total: 50,
+      });
+      (useDLQFilterState as jest.Mock).mockReturnValue({
+        ...defaultFilterMock,
+        page: 3, // last of 3 pages (50 total / 20 per page)
       });
 
       renderWithProviders(<NotificationsPage />);
@@ -389,6 +423,9 @@ describe('NotificationsPage', () => {
       await waitFor(() => {
         expect(adminApi.replayFailedNotificationJob).toHaveBeenCalledWith('job-123');
       });
+      expect(mockToast.success.mock.calls[0][0]).toBe(
+        'Failed notification job replay queued.',
+      );
     });
 
     it('should not call replay API when cancelled', async () => {

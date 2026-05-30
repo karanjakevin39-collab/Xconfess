@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
+import { getApiBaseUrl } from "@/app/lib/config";
+
+const BACKEND_API_URL = getApiBaseUrl();
 
 export async function GET(request: NextRequest) {
   try {
     const token = request.headers.get("authorization")?.replace("Bearer ", "");
 
     const response = await fetch(
-      `${process.env.BACKEND_URL}/notifications/preferences`,
+      `${BACKEND_API_URL}/notifications/preferences`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -14,17 +18,21 @@ export async function GET(request: NextRequest) {
     );
 
     if (!response.ok) {
-      throw new Error("Failed to fetch preferences");
+      const errData = await response.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: response.status,
+        fallbackMessage: "Failed to fetch preferences",
+        route: "GET /api/notifications/preference"
+      });
     }
 
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("Error fetching preferences:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch preferences" },
-      { status: 500 }
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      route: "GET /api/notifications/preference"
+    });
   }
 }
 
@@ -34,7 +42,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
 
     const response = await fetch(
-      `${process.env.BACKEND_URL}/notifications/preferences`,
+      `${BACKEND_API_URL}/notifications/preferences`,
       {
         method: "PUT",
         headers: {
@@ -46,16 +54,21 @@ export async function PUT(request: NextRequest) {
     );
 
     if (!response.ok) {
-      throw new Error("Failed to save preferences");
+      const errData = await response.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: response.status,
+        fallbackMessage: "Failed to save preferences",
+        route: "PUT /api/notifications/preference"
+      });
     }
 
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("Error saving preferences:", error);
-    return NextResponse.json(
-      { error: "Failed to save preferences" },
-      { status: 500 }
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      route: "PUT /api/notifications/preference"
+    });
   }
 }
+

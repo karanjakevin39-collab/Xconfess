@@ -16,17 +16,17 @@ import { AiModerationService, ModerationStatus } from './ai-moderation.service';
 import { ModerationRepositoryService } from './moderation-repository.service';
 
 class TestModerationDto {
-  content: string;
+  content!: string;
 }
 
 class ReviewModerationDto {
-  status: ModerationStatus;
+  status!: ModerationStatus;
   notes?: string;
 }
 
 class UpdateThresholdsDto {
-  highThreshold: number;
-  mediumThreshold: number;
+  highThreshold!: number;
+  mediumThreshold!: number;
 }
 
 /**

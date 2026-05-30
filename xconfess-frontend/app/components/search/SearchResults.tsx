@@ -63,8 +63,8 @@ export function SearchResults({
         }
       >
         {isRetrying && (
-          <p className="text-sm text-amber-200/90 text-center">
-            Search is taking longer than usual — retrying…
+          <p className="text-center text-sm text-[var(--secondary)]">
+            Search is taking longer than usual, retrying...
           </p>
         )}
         {Array.from({ length: 3 }).map((_, i) => (
@@ -78,15 +78,15 @@ export function SearchResults({
     return (
       <div
         className={cn(
-          "flex flex-col items-center justify-center py-16 px-4 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/50",
+          "luxury-panel flex flex-col items-center justify-center rounded-[28px] border border-dashed px-4 py-16",
           className
         )}
         role="status"
       >
-        <p className="text-zinc-400 text-center">
+        <p className="text-center text-[var(--foreground)]">
           Enter a search term or use filters to find confessions.
         </p>
-        <p className="text-zinc-500 text-sm mt-2 text-center">
+        <p className="mt-2 text-center text-sm text-[var(--secondary)]">
           Try &quot;love&quot;, &quot;secret&quot;, or &quot;coding&quot;.
         </p>
       </div>
@@ -97,16 +97,16 @@ export function SearchResults({
     return (
       <div
         className={cn(
-          "flex flex-col items-center justify-center py-16 px-4 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/50",
+          "luxury-panel flex flex-col items-center justify-center rounded-[28px] border border-dashed px-4 py-16",
           className
         )}
         role="status"
         aria-live="polite"
       >
-        <p className="text-zinc-400 text-center">
+        <p className="text-center text-[var(--foreground)]">
           No confessions match your search.
         </p>
-        <p className="text-zinc-500 text-sm mt-2 text-center">
+        <p className="mt-2 text-center text-sm text-[var(--secondary)]">
           {statusMeta?.partial
             ? "Results may be partial right now. Try a broader query while search catches up."
             : "Try different keywords or loosen your filters."}
@@ -116,7 +116,7 @@ export function SearchResults({
             <button
               type="button"
               onClick={onRetry}
-              className="px-3 py-1.5 rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors text-sm"
+              className="rounded-full bg-[linear-gradient(135deg,var(--primary),var(--primary-deep))] px-4 py-2 text-sm font-medium text-white shadow-[0_18px_40px_-22px_rgba(88,105,125,0.55)] transition-colors hover:brightness-105"
             >
               Retry search
             </button>
@@ -125,7 +125,7 @@ export function SearchResults({
             <button
               type="button"
               onClick={onClearFilters}
-              className="px-3 py-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors text-sm"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm text-[var(--secondary)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--foreground)]"
             >
               Clear filters
             </button>
@@ -137,7 +137,7 @@ export function SearchResults({
               key={suggestion}
               type="button"
               onClick={() => onUseSuggestion?.(suggestion)}
-              className="px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors text-xs"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-1.5 text-xs text-[var(--secondary)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--foreground)]"
             >
               Try &quot;{suggestion}&quot;
             </button>
@@ -155,7 +155,7 @@ export function SearchResults({
     <div className={cn("space-y-4", className)} role="region" aria-label="Search results">
       {statusMeta?.degraded && (
         <div
-          className="rounded-lg border border-amber-700/70 bg-amber-950/20 px-3 py-2 text-amber-200 text-sm"
+          className="rounded-[22px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]"
           role="status"
         >
           <p className="font-medium">
@@ -163,17 +163,17 @@ export function SearchResults({
               ? "Partial results shown"
               : "Search is in a degraded state"}
           </p>
-          <p className="text-amber-300/90 text-xs mt-1">
+          <p className="mt-1 text-xs text-[var(--secondary)]">
             {statusMeta.message ||
               statusMeta.warnings[0] ||
               "Some upstream data may be delayed. You can retry or continue with the current results."}
           </p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             {onRetry && (
               <button
                 type="button"
                 onClick={onRetry}
-                className="px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-100 hover:bg-amber-500/30 transition-colors text-xs font-medium"
+                className="rounded-full bg-white/65 px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-white"
               >
                 Retry
               </button>
@@ -182,7 +182,7 @@ export function SearchResults({
               <button
                 type="button"
                 onClick={onClearFilters}
-                className="px-2.5 py-1 rounded-md border border-amber-700/60 text-amber-100 hover:border-amber-500 transition-colors text-xs font-medium"
+                className="rounded-full border border-[var(--border)] bg-transparent px-3 py-1.5 text-xs font-medium text-[var(--secondary)] transition-colors hover:border-[var(--accent-border)] hover:text-[var(--foreground)]"
               >
                 Clear filters
               </button>
@@ -190,11 +190,13 @@ export function SearchResults({
           </div>
         </div>
       )}
+
       {showCount && (
-        <p className="text-sm text-zinc-500">
-          Showing {start}–{end} of {total} result{total !== 1 ? "s" : ""}
+        <p className="text-sm text-[var(--secondary)]">
+          Showing {start}-{end} of {total} result{total !== 1 ? "s" : ""}
         </p>
       )}
+
       <ul className="list-none space-y-3" role="list">
         {results.map((c) => (
           <li key={c.id} role="listitem">
@@ -202,21 +204,23 @@ export function SearchResults({
           </li>
         ))}
       </ul>
+
       {isLoading && page > 1 && (
         <div className="flex justify-center py-6" aria-hidden>
           <div className="flex gap-2">
-            <div className="w-2 h-2 rounded-full bg-zinc-500 animate-bounce" />
-            <div className="w-2 h-2 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.1s]" />
-            <div className="w-2 h-2 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.2s]" />
+            <div className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)]" />
+            <div className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:0.1s]" />
+            <div className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:0.2s]" />
           </div>
         </div>
       )}
+
       {hasMore && !isLoading && onLoadMore && (
         <div className="flex justify-center pt-4">
           <button
             type="button"
             onClick={onLoadMore}
-            className="px-4 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+            className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-5 py-2.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--surface-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]"
           >
             Load more
           </button>

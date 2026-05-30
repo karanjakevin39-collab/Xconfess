@@ -12,7 +12,16 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = "1"
 
 [[test]]
 name = "adversarial"
 path = "tests/adversarial.rs"
+
+[[test]]
+name = "benchmarks"
+path = "tests/benchmarks.rs"
+
+[[test]]
+name = "migration"
+path = "tests/migration.rs"

@@ -67,4 +67,17 @@ export class ExportRequest {
   /** The error message from the most recent processor failure. */
   @Column({ type: 'text', nullable: true })
   lastFailureReason!: string | null;
+
+  // ── One-time download token ───────────────────────────────────────────────
+
+  /**
+   * Random hex nonce issued when a signed download URL is generated.
+   * Cleared after the first successful download to prevent replay.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  downloadToken!: string | null;
+
+  /** Timestamp of the first (and only) successful download. */
+  @Column({ type: 'timestamp', nullable: true })
+  downloadedAt!: Date | null;
 }

@@ -12,7 +12,6 @@ import {
   OutboxStatus,
 } from '../common/entities/outbox-event.entity';
 import { AnonymousConfession } from '../confession/entities/confession.entity';
-import { NotificationQueue } from '../notification/notification.queue';
 import { AnonymousUser } from '../user/entities/anonymous-user.entity';
 import { User } from '../user/entities/user.entity';
 import {
@@ -25,16 +24,15 @@ import {
   ModerationComment,
   ModerationStatus,
 } from './entities/moderation-comment.entity';
+import {
+  decodeCursor,
+  encodeCursor,
+  CursorPaginatedResponseDto,
+} from '../common/pagination';
 
 interface CommentCursor {
   id: number;
   createdAt: string;
-}
-
-export interface PaginatedCommentsResult {
-  comments: Comment[];
-  nextCursor?: string;
-  hasMore: boolean;
 }
 
 @Injectable()
@@ -50,7 +48,6 @@ export class CommentService {
     private moderationCommentRepo: Repository<ModerationComment>,
     @InjectRepository(OutboxEvent)
     private outboxRepo: Repository<OutboxEvent>,
-    private readonly notificationQueue: NotificationQueue,
     private readonly dataSource: DataSource,
     private readonly analyticsService: AnalyticsService,
   ) {}
@@ -162,26 +159,17 @@ export class CommentService {
    * Parse cursor from base64 encoded string
    */
   private parseCursor(cursor?: string): CommentCursor | undefined {
-    if (!cursor) return undefined;
-
-    try {
-      const decoded = atob(cursor);
-      return JSON.parse(decoded) as CommentCursor;
-    } catch (error) {
-      this.logger.warn(`Invalid cursor format: ${cursor}`);
-      return undefined;
-    }
+    return decodeCursor<CommentCursor>(cursor);
   }
 
   /**
    * Create cursor from comment
    */
   private createCursor(comment: Comment): string {
-    const cursor: CommentCursor = {
+    return encodeCursor({
       id: comment.id,
       createdAt: comment.createdAt.toISOString(),
-    };
-    return btoa(JSON.stringify(cursor));
+    });
   }
 
   /**
@@ -242,7 +230,7 @@ export class CommentService {
   async findByConfessionId(
     confessionId: string,
     queryDto: GetCommentsQueryDto,
-  ): Promise<PaginatedCommentsResult> {
+  ): Promise<CursorPaginatedResponseDto<Comment>> {
     const {
       cursor,
       sortField,
@@ -262,8 +250,8 @@ export class CommentService {
       parsedCursor,
     );
 
-    // Determine actual limit (cursor-based takes precedence over page-based)
-    const actualLimit = cursor ? limit! : limit!;
+    // Determine actual limit
+    const actualLimit = limit!;
     const fetchLimit = actualLimit + 1; // Fetch one extra to determine if there are more results
 
     const qb = this.commentRepo
@@ -299,10 +287,13 @@ export class CommentService {
     }
 
     // For page-based pagination, only paginate top-level comments
-    if (!cursor && page) {
+    if (!cursor && page && page > 1) {
       qb.andWhere('comment.parent IS NULL');
       const skip = (page - 1) * actualLimit;
       qb.skip(skip);
+    } else if (!cursor) {
+      // Default behavior for first page without cursor: only top-level comments for cleaner threads
+      qb.andWhere('comment.parent IS NULL');
     }
 
     // Apply ordering and limit
@@ -315,17 +306,18 @@ export class CommentService {
     const resultComments = hasMore ? comments.slice(0, actualLimit) : comments;
 
     // Generate next cursor if there are more results
-    let nextCursor: string | undefined;
+    let nextCursor: string | null = null;
     if (hasMore && resultComments.length > 0) {
       const lastComment = resultComments[resultComments.length - 1];
       nextCursor = this.createCursor(lastComment);
     }
 
-    return {
-      comments: resultComments,
+    return new CursorPaginatedResponseDto(
+      resultComments,
       nextCursor,
       hasMore,
-    };
+      actualLimit,
+    );
   }
 
   /**
@@ -345,7 +337,7 @@ export class CommentService {
     };
 
     const result = await this.findByConfessionId(confessionId, queryDto);
-    return result.comments;
+    return result.data;
   }
 
   async delete(id: number, user: AnonymousUser): Promise<void> {

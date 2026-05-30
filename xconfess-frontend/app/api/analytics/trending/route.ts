@@ -1,3 +1,5 @@
+import { logProxyError } from "@/app/lib/utils/proxyError";
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -89,10 +91,10 @@ export async function GET(request: Request) {
       }
     });
   } catch (error) {
-    console.error('Error fetching analytics:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to fetch analytics' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    logProxyError("Error computing trending analytics", { route: "GET /api/analytics/trending" }, error);
+    return new Response(JSON.stringify({ error: "Failed to fetch analytics" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }

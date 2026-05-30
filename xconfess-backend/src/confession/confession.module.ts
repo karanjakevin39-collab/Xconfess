@@ -64,7 +64,7 @@ class MockRedis {
 
     forwardRef(() => ReactionModule),
     ModerationModule,
-    UserModule,
+    forwardRef(() => UserModule),
     StellarModule,
     SearchDiscoveryModule,
   ],

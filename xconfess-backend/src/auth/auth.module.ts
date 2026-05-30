@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -14,7 +14,7 @@ import { PasswordReset } from './entities/password-reset.entity';
 
 @Module({
   imports: [
-    UserModule,
+    forwardRef(() => UserModule),
     EmailModule,
     PassportModule,
     TypeOrmModule.forFeature([PasswordReset]),

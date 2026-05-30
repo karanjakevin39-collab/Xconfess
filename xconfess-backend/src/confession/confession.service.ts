@@ -5,8 +5,14 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  decodeCursor,
+  encodeCursor,
+  CursorPaginatedResponseDto,
+} from '../common/pagination';
 import { AnonymousConfessionRepository } from './repository/confession.repository';
 import { CreateConfessionDto } from './dto/create-confession.dto';
+import { GetConfessionsByTagDto } from './dto/get-confessions-by-tag.dto';
 import { UpdateConfessionDto } from './dto/update-confession.dto';
 import { SearchConfessionDto } from './dto/search-confession.dto';
 import { GetConfessionsDto, SortOrder } from './dto/get-confessions.dto';
@@ -37,11 +43,12 @@ import { CacheService } from '../cache/cache.service';
 import { TagService } from './tag.service';
 import { ConfessionTag } from './entities/confession-tag.entity';
 import { toWindowBoundaries, TrendingWindow } from 'src/types/analytics.types';
+import { GetUserConfessionsDto } from './dto/get-user-confessions.dto';
 
 @Injectable()
 export class ConfessionService {
   constructor(
-    private confessionRepo: AnonymousConfessionRepository,
+    private readonly confessionRepo: AnonymousConfessionRepository,
     private viewCache: ConfessionViewCacheService,
     private readonly aiModerationService: AiModerationService,
     private readonly moderationRepoService: ModerationRepositoryService,
@@ -71,6 +78,17 @@ export class ConfessionService {
     // Only use 'message' as canonical field
     const msg = this.sanitizeMessage(dto.message);
     if (!msg) throw new BadRequestException('Invalid confession content');
+
+    // Idempotency: return existing confession if key was already processed
+    if (dto.idempotencyKey) {
+      const existing = await this.confessionRepo.findOne({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        existing.message = decryptConfession(existing.message, this.aesKey);
+        return existing;
+      }
+    }
 
     try {
       // Step 0: Validate tags if provided
@@ -130,6 +148,7 @@ export class ConfessionService {
         isHidden: moderationResult.status === ModerationStatus.REJECTED,
         moderationDetails: moderationResult.details,
         ...stellarData,
+        ...(dto.idempotencyKey ? { idempotencyKey: dto.idempotencyKey } : {}),
       });
 
       const savedConfession = await confessionRepo.save(conf);
@@ -188,14 +207,18 @@ export class ConfessionService {
   }
 
   async getConfessions(dto: GetConfessionsDto) {
-    const page = dto.page ?? 1;
     const limit = dto.limit ?? 10;
-    if (limit < 1 || limit > 100)
-      throw new BadRequestException('limit must be 1–100');
+    const sort = dto.sort || SortOrder.NEWEST;
+
+    // Use cursor if provided
+    const parsedCursor = decodeCursor<{ id: string; created_at: string }>(
+      dto.cursor,
+    );
 
     const cacheKey = this.cacheService.buildKey(
       'confessions',
-      page,
+      dto.cursor || 'no-cursor',
+      dto.page || 1,
       limit,
       dto.gender || 'all',
       dto.sort || 'recent',
@@ -206,7 +229,6 @@ export class ConfessionService {
       return cached;
     }
 
-    const skip = (page - 1) * limit;
     const qb = this.confessionRepo
       .createQueryBuilder('confession')
       .leftJoinAndSelect('confession.anonymousUser', 'anonymousUser')
@@ -239,7 +261,18 @@ export class ConfessionService {
       qb.andWhere('confession.gender = :gender', { gender: dto.gender });
     }
 
-    if (dto.sort === SortOrder.TRENDING) {
+    // Apply cursor or page-based filter
+    if (parsedCursor && sort === SortOrder.NEWEST) {
+      qb.andWhere(
+        '(confession.created_at < :createdAt OR (confession.created_at = :createdAt AND confession.id < :id))',
+        { createdAt: parsedCursor.created_at, id: parsedCursor.id },
+      );
+    } else if (dto.page && dto.page > 1) {
+      const skip = (dto.page - 1) * limit;
+      qb.skip(skip);
+    }
+
+    if (sort === SortOrder.TRENDING) {
       qb.addSelect(
         (sub) =>
           sub
@@ -251,25 +284,41 @@ export class ConfessionService {
         .orderBy('reaction_count', 'DESC')
         .addOrderBy('confession.created_at', 'DESC');
     } else {
-      qb.orderBy('confession.created_at', 'DESC');
+      qb.orderBy('confession.created_at', 'DESC').addOrderBy(
+        'confession.id',
+        'DESC',
+      );
     }
 
-    const total = await qb.getCount();
-    const items = await qb.skip(skip).take(limit).getMany();
+    // Fetch one extra to determine if there's more
+    const items = await qb.take(limit + 1).getMany();
+    const hasMore = items.length > limit;
+    const resultItems = hasMore ? items.slice(0, limit) : items;
 
-    const decryptedItems = items.map((item) => ({
+    const decryptedItems = resultItems.map((item) => ({
       ...item,
       message: decryptConfession(item.message, this.aesKey),
     }));
 
-    const result = {
-      data: decryptedItems,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    };
+    let nextCursor: string | null = null;
+    if (hasMore && decryptedItems.length > 0) {
+      const lastItem = items[limit - 1];
+      nextCursor = encodeCursor({
+        id: lastItem.id,
+        created_at: lastItem.created_at.toISOString(),
+      });
+    }
 
-    await this.cacheService.set(cacheKey, result, 300);
+    const response = new CursorPaginatedResponseDto(
+      decryptedItems,
+      nextCursor,
+      hasMore,
+      limit,
+    );
 
-    return result;
+    await this.cacheService.set(cacheKey, response, 300);
+
+    return response;
   }
 
   async update(id: string, dto: UpdateConfessionDto) {
@@ -372,10 +421,7 @@ export class ConfessionService {
    * stays bounded under high traffic.
    */
   private shouldSampleSearch(): boolean {
-    const rate = this.configService.get<number>(
-      'app.searchSampleRate',
-      0.1,
-    );
+    const rate = this.configService.get<number>('app.searchSampleRate', 0.1);
     return Math.random() < rate;
   }
 
@@ -650,7 +696,7 @@ export class ConfessionService {
       );
 
       return confession;
-    } catch (error) {
+    } catch (error: any) {
       // Option 2: Use maskUserId helper for custom messages
       this.logger.error(
         `Failed to create confession for ${maskUserId(userId)}: ${error.message}`,
@@ -661,14 +707,99 @@ export class ConfessionService {
     }
   }
 
-  async getUserConfessions(userId: string) {
-    // Option 3: Mask in object logging
+  async getUserConfessions(userId: number, dto: GetUserConfessionsDto) {
     this.logger.log(
-      { action: 'fetch_confessions', userId: maskUserId(userId) },
+      {
+        action: 'fetch_user_confessions',
+        userId: maskUserId(userId.toString()),
+      },
       'ConfessionsService',
     );
 
-    return this.findByUser(userId);
+    const anonIds = await this.anonymousUserService.getAnonIdsForUser(userId);
+
+    if (anonIds.length === 0) {
+      return new CursorPaginatedResponseDto([], null, false, dto.limit || 10);
+    }
+
+    const limit = dto.limit ?? 10;
+    const sort = dto.sort || SortOrder.NEWEST;
+
+    const queryBuilder = this.confessionRepo
+      .createQueryBuilder('confession')
+      .where('confession.anonymousUserId IN (:...anonIds)', { anonIds })
+      .andWhere('confession.isDeleted = false');
+
+    if (dto.gender) {
+      queryBuilder.andWhere('confession.gender = :gender', {
+        gender: dto.gender,
+      });
+    }
+
+    if (dto.status) {
+      queryBuilder.andWhere('confession.moderationStatus = :status', {
+        status: dto.status,
+      });
+    }
+
+    // Apply cursor pagination
+    if (dto.cursor && sort === SortOrder.NEWEST) {
+      const parsedCursor = decodeCursor<{ id: string; created_at: string }>(
+        dto.cursor,
+      );
+      if (parsedCursor) {
+        queryBuilder.andWhere(
+          '(confession.created_at < :createdAt OR (confession.created_at = :createdAt AND confession.id < :id))',
+          { createdAt: parsedCursor.created_at, id: parsedCursor.id },
+        );
+      }
+    } else if (dto.page && dto.page > 1) {
+      const skip = (dto.page - 1) * limit;
+      queryBuilder.skip(skip);
+    }
+
+    if (sort === SortOrder.TRENDING) {
+      queryBuilder
+        .addSelect(
+          (sub) =>
+            sub
+              .select('COUNT(*)')
+              .from('reaction', 'r')
+              .where('r.confession_id = confession.id'),
+          'reaction_count',
+        )
+        .orderBy('reaction_count', 'DESC')
+        .addOrderBy('confession.created_at', 'DESC');
+    } else {
+      queryBuilder
+        .orderBy('confession.created_at', 'DESC')
+        .addOrderBy('confession.id', 'DESC');
+    }
+
+    const items = await queryBuilder.take(limit + 1).getMany();
+    const hasMore = items.length > limit;
+    const resultItems = hasMore ? items.slice(0, limit) : items;
+
+    const decryptedItems = resultItems.map((item) => ({
+      ...item,
+      message: decryptConfession(item.message, this.aesKey),
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && decryptedItems.length > 0) {
+      const lastItem = items[limit - 1];
+      nextCursor = encodeCursor({
+        id: lastItem.id,
+        created_at: lastItem.created_at.toISOString(),
+      });
+    }
+
+    return new CursorPaginatedResponseDto(
+      decryptedItems,
+      nextCursor,
+      hasMore,
+      limit,
+    );
   }
 
   // Private methods (examples)
@@ -678,7 +809,9 @@ export class ConfessionService {
   }
 
   private async findByUser(_userId: string) {
-    // Implementation
+    // Legacy method - redirecting to the new implementation
+    // Note: This matches the old signature but doesn't support pagination/filtering.
+    // It's better to use getUserConfessions directly.
     return [];
   }
 
@@ -690,7 +823,7 @@ export class ConfessionService {
 
       // Decrypt all confessions and convert to DTO
       return confessions.map((confession) => this.toResponseDto(confession));
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         'Failed to fetch confessions',
         error.stack,
@@ -711,7 +844,7 @@ export class ConfessionService {
       }
 
       return this.toResponseDto(confession);
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof NotFoundException) {
         throw error;
       }
@@ -743,6 +876,23 @@ export class ConfessionService {
       );
     }
 
+    // A stellarTxHash without isAnchored means a prior submission is pending
+    // on-chain. Return the existing pending state instead of starting new work.
+    if (confession.stellarTxHash && !confession.isAnchored) {
+      return {
+        confessionId: confession.id,
+        stellarTxHash: confession.stellarTxHash,
+        stellarHash: confession.stellarHash,
+        isAnchored: false,
+        anchorPending: true,
+        message:
+          'An anchor submission is already pending for this confession. Wait for it to confirm or fail before retrying.',
+        stellarExplorerUrl: this.stellarService.getExplorerUrl(
+          confession.stellarTxHash,
+        ),
+      };
+    }
+
     if (!this.stellarService.isValidTxHash(dto.stellarTxHash)) {
       throw new BadRequestException('Invalid Stellar transaction hash format');
     }
@@ -758,12 +908,11 @@ export class ConfessionService {
       throw new BadRequestException('Failed to process anchoring data');
     }
 
-    // Update confession with Stellar data
+    // Persist as pending: the transaction hash is recorded but isAnchored stays
+    // false until verifyStellarAnchor confirms the chain result.
     await this.confessionRepo.update(id, {
       stellarTxHash: anchorData.stellarTxHash,
       stellarHash: anchorData.stellarHash,
-      isAnchored: true,
-      anchoredAt: anchorData.anchoredAt,
     });
 
     const updated = await this.confessionRepo.findOne({ where: { id } });
@@ -773,6 +922,7 @@ export class ConfessionService {
 
     return {
       ...updated,
+      anchorPending: true,
       stellarExplorerUrl: this.stellarService.getExplorerUrl(dto.stellarTxHash),
     };
   }
@@ -789,9 +939,11 @@ export class ConfessionService {
       throw new NotFoundException(`Confession ${id} not found`);
     }
 
-    if (!confession.isAnchored || !confession.stellarTxHash) {
+    // Not yet submitted to Stellar at all
+    if (!confession.stellarTxHash) {
       return {
         isAnchored: false,
+        anchorPending: false,
         message: 'Confession is not anchored on Stellar',
       };
     }
@@ -800,8 +952,20 @@ export class ConfessionService {
       confession.stellarTxHash,
     );
 
+    // Pending anchor confirmed on-chain: promote to fully anchored
+    if (!confession.isAnchored && isVerified) {
+      const now = new Date();
+      await this.confessionRepo.update(confession.id, {
+        isAnchored: true,
+        anchoredAt: now,
+      });
+      confession.isAnchored = true;
+      confession.anchoredAt = now;
+    }
+
     return {
-      isAnchored: true,
+      isAnchored: confession.isAnchored,
+      anchorPending: !confession.isAnchored,
       isVerified,
       stellarTxHash: confession.stellarTxHash,
       stellarHash: confession.stellarHash,
@@ -832,7 +996,10 @@ export class ConfessionService {
   /**
    * Get confessions filtered by tag with pagination
    */
-  async getConfessionsByTag(tagName: string, dto: any) {
+  /**
+   * Get confessions filtered by tag with pagination
+   */
+  async getConfessionsByTag(tagName: string, dto: GetConfessionsByTagDto) {
     const page = dto.page ?? 1;
     const limit = dto.limit ?? 10;
 
@@ -846,11 +1013,12 @@ export class ConfessionService {
       throw new NotFoundException(`Tag '${tagName}' not found`);
     }
 
+    const cursor = dto.cursor;
     const cacheKey = this.cacheService.buildKey(
       'confessions',
       'tag',
       tagName,
-      page,
+      cursor || `page_${page}`,
       limit,
       dto.sort || 'newest',
     );
@@ -860,27 +1028,20 @@ export class ConfessionService {
       return cached;
     }
 
-    const { confessions, total } = await this.confessionRepo.findByTag(
-      tagName,
-      page,
-      limit,
-    );
+    const { confessions, nextCursor, hasMore } =
+      await this.confessionRepo.findByTag(tagName, page, limit, cursor);
 
     const decryptedItems = confessions.map((item) => ({
       ...item,
       message: decryptConfession(item.message, this.aesKey),
     }));
 
-    const result = {
-      data: decryptedItems,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-        tag: tagName,
-      },
-    };
+    const result = new CursorPaginatedResponseDto(
+      decryptedItems,
+      nextCursor || null,
+      hasMore,
+      limit,
+    );
 
     await this.cacheService.set(cacheKey, result, 300);
 

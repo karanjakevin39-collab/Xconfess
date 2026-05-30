@@ -11,11 +11,28 @@ import {
 import { JobManagementService } from './services/job-management.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import { AuditLogContext } from '../audit-log/audit-log.service';
 
 @Controller('admin/dlq')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class DlqAdminController {
   constructor(private readonly jobManagementService: JobManagementService) {}
+
+  private buildAuditContext(req: any): AuditLogContext {
+    const userAgentHeader = req?.headers?.['user-agent'];
+
+    return {
+      requestId:
+        req?.requestId ||
+        req?.id ||
+        (typeof req?.headers?.['x-request-id'] === 'string'
+          ? req.headers['x-request-id']
+          : undefined),
+      ipAddress: req?.ip || req?.socket?.remoteAddress,
+      userAgent:
+        typeof userAgentHeader === 'string' ? userAgentHeader : undefined,
+    };
+  }
 
   @Get()
   async list(
@@ -35,13 +52,22 @@ export class DlqAdminController {
   @Post(':id/retry')
   async retry(@Param('id') id: string, @Req() req: any) {
     const actorId = String(req.user?.id);
-    return this.jobManagementService.replayDlqJob(id, actorId);
+    return this.jobManagementService.replayDlqJob(
+      id,
+      actorId,
+      undefined,
+      this.buildAuditContext(req),
+    );
   }
 
   @Post('replay-bulk')
   async replayBulk(@Req() req: any, @Query() options: any) {
     const actorId = String(req.user?.id);
-    return this.jobManagementService.replayDlqJobsBulk(actorId, options);
+    return this.jobManagementService.replayDlqJobsBulk(
+      actorId,
+      options,
+      this.buildAuditContext(req),
+    );
   }
 
   @Delete(':id')
@@ -51,8 +77,13 @@ export class DlqAdminController {
   }
 
   @Post('cleanup')
-  async cleanup(@Query() options: any) {
-    return this.jobManagementService.cleanupDlq(options);
+  async cleanup(@Req() req: any, @Query() options: any) {
+    const actorId = String(req.user?.id);
+    return this.jobManagementService.cleanupDlq(
+      actorId,
+      options,
+      this.buildAuditContext(req),
+    );
   }
 
   @Get('diagnostics')

@@ -19,9 +19,7 @@ export class EncryptionService {
         'CONFESSION_ENCRYPTION_KEY must be set in environment variables',
       );
     }
-
     this.key = Buffer.from(keyString, 'hex');
-
     if (this.key.length !== 32) {
       throw new Error(
         'CONFESSION_ENCRYPTION_KEY must be 32 bytes (64 hex characters)',
@@ -44,9 +42,26 @@ export class EncryptionService {
   decrypt(encryptedText: string): string {
     if (!encryptedText) return encryptedText;
 
-    const [ivHex, authTagHex, encrypted] = encryptedText.split(':');
+    const parts = encryptedText.split(':');
+    if (parts.length !== 3) {
+      throw new Error('Invalid encrypted data format');
+    }
 
-    if (!ivHex || !authTagHex || !encrypted) {
+    const [ivHex, authTagHex, encrypted] = parts;
+
+    const isHex = (value: string) =>
+      value.length % 2 === 0 && /^[0-9a-f]+$/i.test(value);
+
+    if (
+      !ivHex ||
+      !authTagHex ||
+      !encrypted ||
+      ivHex.length !== IV_LENGTH * 2 ||
+      authTagHex.length !== 32 ||
+      !isHex(ivHex) ||
+      !isHex(authTagHex) ||
+      !isHex(encrypted)
+    ) {
       throw new Error('Invalid encrypted data format');
     }
 

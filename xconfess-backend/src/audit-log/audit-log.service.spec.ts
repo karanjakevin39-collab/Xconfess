@@ -3,10 +3,12 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLogService } from './audit-log.service';
 import { AuditLog, AuditActionType } from './audit-log.entity';
+import { AuditLogRedactionService } from './audit-log-redaction.service';
 
 describe('AuditLogService', () => {
   let service: AuditLogService;
   let repository: jest.Mocked<Repository<AuditLog>>;
+  let redaction: jest.Mocked<AuditLogRedactionService>;
 
   const mockQueryBuilder = {
     leftJoinAndSelect: jest.fn().mockReturnThis(),
@@ -31,6 +33,11 @@ describe('AuditLogService', () => {
     createQueryBuilder: jest.fn(() => mockQueryBuilder),
   };
 
+  const mockRedaction = {
+    redactMetadata: jest.fn((meta) => meta),
+    isSensitiveField: jest.fn().mockReturnValue(false),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -41,11 +48,16 @@ describe('AuditLogService', () => {
           provide: getRepositoryToken(AuditLog),
           useValue: mockRepository,
         },
+        {
+          provide: AuditLogRedactionService,
+          useValue: mockRedaction,
+        },
       ],
     }).compile();
 
     service = module.get<AuditLogService>(AuditLogService);
     repository = module.get(getRepositoryToken(AuditLog));
+    redaction = module.get(AuditLogRedactionService);
   });
 
   it('is defined', () => {
@@ -190,6 +202,54 @@ describe('AuditLogService', () => {
     );
   });
 
+  it('records notification DLQ cleanup audit entries with target summaries', async () => {
+    mockRepository.create.mockReturnValue({} as AuditLog);
+    mockRepository.save.mockResolvedValue({} as AuditLog);
+
+    await service.logNotificationDlqCleanup(
+      'admin-9',
+      {
+        cleanupType: 'bulk',
+        queue: 'notifications-dlq',
+        operationId: 'cleanup:admin-9:1',
+        targetJobIds: ['dlq-1', 'dlq-2'],
+        summary: {
+          attempted: 2,
+          removed: 1,
+          failed: 1,
+          noOp: false,
+        },
+        outcomes: [
+          { jobId: 'dlq-1', outcome: 'removed' },
+          { jobId: 'dlq-2', outcome: 'failed', error: 'redis timeout' },
+        ],
+      },
+      { requestId: 'req-clean-1', ipAddress: '10.0.0.7' },
+    );
+
+    expect(mockRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditActionType.NOTIFICATION_DLQ_CLEANUP,
+        metadata: expect.objectContaining({
+          entityType: 'notification_dlq',
+          cleanupType: 'bulk',
+          queue: 'notifications-dlq',
+          operationId: 'cleanup:admin-9:1',
+          targetJobIds: ['dlq-1', 'dlq-2'],
+          summary: expect.objectContaining({
+            attempted: 2,
+            removed: 1,
+            failed: 1,
+          }),
+          actorType: 'admin',
+          actorId: 'admin-9',
+        }),
+        requestId: 'req-clean-1',
+        ipAddress: '10.0.0.7',
+      }),
+    );
+  });
+
   it('tags admin moderation actions with admin actor metadata', async () => {
     mockRepository.create.mockReturnValue({} as AuditLog);
     mockRepository.save.mockResolvedValue({} as AuditLog);
@@ -203,7 +263,7 @@ describe('AuditLogService', () => {
 
     expect(mockRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        actionType: AuditActionType.REPORT_RESOLVED,
+        action: AuditActionType.REPORT_RESOLVED,
         metadata: expect.objectContaining({
           reportId: 'report-1',
           actorType: 'admin',
@@ -264,7 +324,7 @@ describe('AuditLogService', () => {
       { entityType: 'data_export' },
     );
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-      "audit_log.metadata->>'requestId' = :requestId",
+      "(audit_log.request_id = :requestId OR audit_log.metadata->>'requestId' = :requestId)",
       { requestId: 'export-req-1' },
     );
     expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
@@ -280,5 +340,112 @@ describe('AuditLogService', () => {
     await expect(
       service.logConfessionDelete('conf-1', 'user-1'),
     ).resolves.not.toThrow();
+  });
+
+  describe('redaction integration', () => {
+    it('calls redactMetadata on metadata before persisting', async () => {
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      await service.log({
+        actionType: AuditActionType.REPORT_CREATED,
+        metadata: {
+          entityType: 'report',
+          entityId: 'r1',
+          secret: 'should-be-redacted',
+        },
+        context: { userId: '42' },
+      });
+
+      expect(redaction.redactMetadata).toHaveBeenCalledTimes(1);
+      expect(mockRepository.create).toHaveBeenCalled();
+    });
+
+    it('preserves useful audit fields after redaction', async () => {
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      await service.logConfessionDelete('conf-1', 'admin-7', {
+        requestId: 'req-1',
+      });
+
+      const createCall = mockRepository.create.mock.calls[0][0];
+      expect(createCall.metadata).toBeDefined();
+      expect(createCall.metadata.confessionId).toBe('conf-1');
+      expect(createCall.metadata.entityType).toBe('confession');
+      expect(createCall.metadata.entityId).toBe('conf-1');
+      expect(createCall.metadata.deletedAt).toBeDefined();
+    });
+
+    it('redacts sensitive fields in convenience methods', async () => {
+      mockRedaction.redactMetadata.mockImplementation((meta) => {
+        const result = { ...meta };
+        if ('token' in result) {
+          result.token = '[REDACTED]';
+        }
+        return result;
+      });
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      await service.logFailedLogin('user@example.com', 'invalid_token', {
+        requestId: 'req-2',
+      });
+
+      const createCall = mockRepository.create.mock.calls[0][0];
+      expect(redaction.redactMetadata).toHaveBeenCalled();
+      expect(createCall.metadata.identifier).toBeDefined();
+      expect(createCall.metadata.reason).toBeDefined();
+    });
+
+    it('redacts tokens in export lifecycle metadata', async () => {
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      await service.logExportLifecycleEvent({
+        action: 'downloaded',
+        actorType: 'user',
+        actorId: 'user-42',
+        requestId: 'export-req-1',
+        exportId: 'export-req-1',
+        metadata: {
+          downloadToken: 'secret-download-token',
+          source: 'signed_link',
+        },
+      });
+
+      expect(redaction.redactMetadata).toHaveBeenCalled();
+    });
+
+    it('redacts sensitive fields in rollout diff metadata', async () => {
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      await service.logTemplateRolloutDiff({
+        templateKey: 'welcome',
+        changeType: 'canary_update',
+        actorId: 'admin-1',
+        before: { secret: 'old-secret', activeVersion: 'v1' },
+        after: { secret: 'new-secret', activeVersion: 'v2' },
+      });
+
+      expect(redaction.redactMetadata).toHaveBeenCalled();
+    });
+
+    it('falls back to raw metadata when redaction fails', async () => {
+      mockRedaction.redactMetadata.mockImplementation(() => {
+        throw new Error('redaction failure');
+      });
+      mockRepository.create.mockReturnValue({} as AuditLog);
+      mockRepository.save.mockResolvedValue({} as AuditLog);
+
+      // Should not throw - audit logging must never break the app
+      await expect(
+        service.logConfessionDelete('conf-1', 'user-1'),
+      ).resolves.not.toThrow();
+
+      expect(mockRepository.save).toHaveBeenCalled();
+      expect(mockRepository.create).toHaveBeenCalled();
+    });
   });
 });

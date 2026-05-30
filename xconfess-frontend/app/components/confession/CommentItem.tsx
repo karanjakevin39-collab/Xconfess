@@ -22,17 +22,24 @@ export function CommentItem({
 
   return (
     <article
-      className={`rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 ${
-        isReply ? "ml-6 sm:ml-8 border-l-2 border-l-zinc-700" : ""
-      }`}
+      className={`min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 sm:p-4 ${
+        isReply ? "ml-3 border-l-2 border-l-zinc-700 pl-3 sm:ml-6 sm:pl-4" : ""
+      } ${comment.isOptimistic ? "opacity-80" : ""}`}
       data-comment-id={comment.id}
     >
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="text-sm font-medium text-zinc-400">
-          {comment.author || "Anonymous"}
-        </span>
+      <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span className="min-w-0 max-w-full break-words text-sm font-medium text-zinc-400 [overflow-wrap:anywhere]">
+            {comment.author || "Anonymous"}
+          </span>
+          {comment.isOptimistic && (
+            <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+              Sending
+            </span>
+          )}
+        </div>
         <time
-          className="text-xs text-zinc-500"
+          className="shrink-0 text-xs text-zinc-500"
           dateTime={
             typeof comment.createdAt === "string"
               ? comment.createdAt
@@ -42,19 +49,21 @@ export function CommentItem({
           {date}
         </time>
       </div>
-      <p className="text-zinc-200 text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
+      <p className="min-w-0 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-200 [overflow-wrap:anywhere]">
         {comment.content}
       </p>
       {onReply && (
-        <button
-          type="button"
-          onClick={() => onReply(comment)}
-          className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors min-h-[44px] min-w-[44px] touch-manipulation"
-          aria-label={`Reply to comment by ${comment.author}`}
-        >
-          <MessageCircle className="h-3.5 w-3.5" />
-          Reply
-        </button>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onReply(comment)}
+            className="flex min-h-[44px] min-w-[44px] touch-manipulation items-center gap-1.5 text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+            aria-label={`Reply to comment by ${comment.author || "Anonymous"}`}
+          >
+            <MessageCircle className="h-3.5 w-3.5 shrink-0" />
+            <span>Reply</span>
+          </button>
+        </div>
       )}
     </article>
   );

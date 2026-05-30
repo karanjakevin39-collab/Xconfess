@@ -1,8 +1,10 @@
 import { AdminService } from './admin.service';
 import { ModerationService } from './moderation.service';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { ReportStatus } from '../entities/report.entity';
+import { Report, ReportStatus } from '../entities/report.entity';
 import { AuditActionType } from '../../audit-log/audit-log.entity';
+import { AnonymousConfession } from '../../confession/entities/confession.entity';
+import { User } from '../../user/entities/user.entity';
 
 function createChainableQB(overrides: Partial<any> = {}) {
   const qb: any = {
@@ -38,6 +40,9 @@ describe('AdminService', () => {
     save: jest.fn(),
     find: jest.fn(),
     count: jest.fn(),
+    manager: {
+      transaction: jest.fn(),
+    },
   };
 
   const confessionRepository: any = {
@@ -58,16 +63,53 @@ describe('AdminService', () => {
     find: jest.fn(),
   };
 
+  const tipRepository: any = {
+    findOne: jest.fn(),
+    find: jest.fn(),
+  };
+
+  const moderationTemplateService: any = {
+    findById: jest.fn().mockResolvedValue(null),
+  };
+
+  const configService: any = {
+    get: jest.fn().mockReturnValue(''),
+  };
+
+  const eventEmitter: any = {
+    emit: jest.fn(),
+  };
+
   let service: AdminService;
 
   beforeEach(() => {
     jest.resetAllMocks();
+    reportRepository.manager.transaction.mockImplementation(async (work: any) =>
+      work({
+        getRepository: (entity: any) => {
+          if (entity === Report) {
+            return reportRepository;
+          }
+          if (entity === AnonymousConfession) {
+            return confessionRepository;
+          }
+          if (entity === User) {
+            return userRepository;
+          }
+          return reportRepository;
+        },
+      }),
+    );
     service = new AdminService(
       reportRepository,
       confessionRepository,
       userRepository,
       userAnonRepository,
+      tipRepository,
       moderationService as ModerationService,
+      moderationTemplateService,
+      configService,
+      eventEmitter,
     );
   });
 
@@ -116,7 +158,7 @@ describe('AdminService', () => {
     reportRepository.findOne.mockResolvedValue(report);
     reportRepository.save.mockImplementation(async (r: any) => r);
 
-    const res = await service.resolveReport('r1', 1, 'ok', {} as any);
+    const res = await service.resolveReport('r1', 1, 'ok', null, {} as any);
     expect(res.status).toBe(ReportStatus.RESOLVED);
     expect(moderationService.logAction).toHaveBeenCalledWith(
       1,
@@ -125,6 +167,7 @@ describe('AdminService', () => {
       'r1',
       expect.any(Object),
       'ok',
+      expect.anything(),
       expect.anything(),
     );
   });
@@ -137,6 +180,62 @@ describe('AdminService', () => {
     await expect(
       service.resolveReport('r1', 1, null, undefined),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('resolveReport rolls back status update when audit logging fails', async () => {
+    const committedState = {
+      report: {
+        id: 'r1',
+        status: ReportStatus.PENDING,
+        type: 'spam',
+        confessionId: 'c1',
+        resolvedBy: null,
+        resolvedAt: null,
+        resolutionNotes: null,
+        templateId: null,
+      } as any,
+    };
+
+    reportRepository.manager.transaction.mockImplementationOnce(
+      async (work: any) => {
+        const stagedReport = { ...committedState.report };
+        const txReportRepo = {
+          findOne: jest.fn().mockResolvedValue(stagedReport),
+          save: jest.fn().mockImplementation(async (report: any) => report),
+        };
+
+        const result = await work({
+          getRepository: (entity: any) => {
+            if (entity === Report) {
+              return txReportRepo;
+            }
+            if (entity === AnonymousConfession) {
+              return confessionRepository;
+            }
+            if (entity === User) {
+              return userRepository;
+            }
+            return txReportRepo;
+          },
+        });
+        committedState.report = stagedReport;
+        return result;
+      },
+    );
+
+    (moderationService.logAction as jest.Mock).mockRejectedValueOnce(
+      new Error('Injected audit failure'),
+    );
+
+    await expect(
+      service.resolveReport('r1', 1, 'note', null, {} as any),
+    ).rejects.toThrow('Injected audit failure');
+
+    expect(committedState.report.status).toBe(ReportStatus.PENDING);
+    expect(eventEmitter.emit).not.toHaveBeenCalledWith(
+      'report.updated',
+      expect.anything(),
+    );
   });
 
   it('dismissReport updates status and logs audit action', async () => {
@@ -159,35 +258,86 @@ describe('AdminService', () => {
       expect.any(Object),
       'no violation',
       expect.anything(),
+      expect.anything(),
     );
   });
 
-  it('bulkResolveReports returns 0 when none pending', async () => {
+  it('bulkResolveReports returns structured result when none pending', async () => {
     reportRepository.find.mockResolvedValue([]);
-    const count = await service.bulkResolveReports(['a'], 1, null, undefined);
-    expect(count).toBe(0);
+    const result = await service.bulkResolveReports(['a'], 1, null, undefined);
+    expect(result.resolved).toBe(0);
+    expect(result.notFound).toBe(1);
+    expect(result.outcomes[0]).toMatchObject({ id: 'a', outcome: 'not_found' });
   });
 
-  it('bulkResolveReports resolves pending reports and logs bulk action', async () => {
+  it('bulkResolveReports resolves pending reports and logs per-report audit', async () => {
     reportRepository.find.mockResolvedValue([
       { id: 'a', status: ReportStatus.PENDING },
     ]);
     reportRepository.save.mockResolvedValue(undefined);
-    const count = await service.bulkResolveReports(
+    const result = await service.bulkResolveReports(
       ['a'],
       1,
       'notes',
       {} as any,
     );
-    expect(count).toBe(1);
+    expect(result.resolved).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.notFound).toBe(0);
+    expect(result.outcomes[0]).toMatchObject({ id: 'a', outcome: 'resolved' });
     expect(moderationService.logAction).toHaveBeenCalledWith(
       1,
       AuditActionType.BULK_ACTION,
       'report',
-      null,
-      expect.any(Object),
+      'a',
+      expect.objectContaining({ outcome: 'resolved', action: 'bulk_resolve' }),
       'notes',
       expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('bulkResolveReports skips already-resolved reports', async () => {
+    reportRepository.find.mockResolvedValue([
+      { id: 'b', status: ReportStatus.RESOLVED },
+    ]);
+    reportRepository.save.mockResolvedValue(undefined);
+    const result = await service.bulkResolveReports(['b'], 1, null, undefined);
+    expect(result.resolved).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.outcomes[0]).toMatchObject({ id: 'b', outcome: 'skipped' });
+    // Audit log still fired for the skipped report
+    expect(moderationService.logAction).toHaveBeenCalledWith(
+      1,
+      AuditActionType.BULK_ACTION,
+      'report',
+      'b',
+      expect.objectContaining({ outcome: 'skipped' }),
+      null,
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it('bulkResolveReports handles mixed success/skip/not_found in one call', async () => {
+    reportRepository.find.mockResolvedValue([
+      { id: 'ok', status: ReportStatus.PENDING },
+      { id: 'skip', status: ReportStatus.DISMISSED },
+    ]);
+    reportRepository.save.mockResolvedValue(undefined);
+    const result = await service.bulkResolveReports(
+      ['ok', 'skip', 'missing'],
+      1,
+      'bulk',
+      {} as any,
+    );
+    expect(result.requested).toBe(3);
+    expect(result.resolved).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.notFound).toBe(1);
+    // One audit entry per requested ID
+    expect((moderationService.logAction as jest.Mock).mock.calls).toHaveLength(
+      3,
     );
   });
 
@@ -282,5 +432,81 @@ describe('AdminService', () => {
     expect(res.overview.totalUsers).toBeDefined();
     expect(res.reports.byStatus).toBeDefined();
     expect(res.trends.confessionsOverTime).toBeDefined();
+  });
+
+  // ── Operator anchor & tip lookup (#778) ──────────────────────────────────
+
+  it('lookupAnchorAndTip throws when neither txHash nor confessionId provided', async () => {
+    await expect(service.lookupAnchorAndTip({})).rejects.toBeInstanceOf(
+      require('@nestjs/common').BadRequestException,
+    );
+  });
+
+  it('lookupAnchorAndTip by txHash returns anchor and tip records', async () => {
+    const confession = {
+      id: 'conf-x',
+      stellarTxHash: 'tx-abc',
+      stellarHash: 'hash-abc',
+      isAnchored: true,
+      anchoredAt: new Date('2026-01-01'),
+    };
+    const tip = {
+      id: 'tip-1',
+      txId: 'tx-abc',
+      amount: '1.5',
+      senderAddress: 'GADDR',
+      verificationStatus: 'verified',
+      verifiedAt: new Date(),
+      createdAt: new Date(),
+    };
+    confessionRepository.findOne = jest.fn().mockResolvedValue(confession);
+    tipRepository.findOne.mockResolvedValue(tip);
+
+    const result = await service.lookupAnchorAndTip({ txHash: 'tx-abc' });
+
+    expect(result.anchor).not.toBeNull();
+    expect(result.anchor!.confessionId).toBe('conf-x');
+    expect(result.anchor!.isAnchored).toBe(true);
+    expect(result.tips).toHaveLength(1);
+    expect(result.tips[0].txId).toBe('tx-abc');
+  });
+
+  it('lookupAnchorAndTip returns null anchor when not found', async () => {
+    confessionRepository.findOne = jest.fn().mockResolvedValue(null);
+    tipRepository.findOne.mockResolvedValue(null);
+
+    const result = await service.lookupAnchorAndTip({ txHash: 'tx-missing' });
+
+    expect(result.anchor).toBeNull();
+    expect(result.tips).toHaveLength(0);
+  });
+
+  it('lookupAnchorAndTip by confessionId returns tips list', async () => {
+    const confession = {
+      id: 'conf-y',
+      stellarTxHash: null,
+      stellarHash: null,
+      isAnchored: false,
+      anchoredAt: null,
+    };
+    const tips = [
+      {
+        id: 'tip-2',
+        txId: 'tx-2',
+        amount: '2.0',
+        senderAddress: null,
+        verificationStatus: 'verified',
+        verifiedAt: null,
+        createdAt: new Date(),
+      },
+    ];
+    confessionRepository.findOne = jest.fn().mockResolvedValue(confession);
+    tipRepository.find.mockResolvedValue(tips);
+    tipRepository.findOne.mockResolvedValue(null);
+
+    const result = await service.lookupAnchorAndTip({ confessionId: 'conf-y' });
+
+    expect(result.anchor!.confessionId).toBe('conf-y');
+    expect(result.tips).toHaveLength(1);
   });
 });

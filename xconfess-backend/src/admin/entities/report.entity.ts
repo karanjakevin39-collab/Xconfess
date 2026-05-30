@@ -44,7 +44,7 @@ export class Report {
   @JoinColumn({ name: 'confession_id' })
   confession: AnonymousConfession;
 
-  @Column({ name: 'reporter_id', nullable: true })
+  @Column({ name: 'reporter_id', type: 'int', nullable: true })
   reporterId: number | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
@@ -74,20 +74,20 @@ export class Report {
   })
   status: ReportStatus;
 
-  @Column({ name: 'resolved_by', nullable: true })
+  @Column({ name: 'resolved_by', type: 'int', nullable: true })
   resolvedBy: number | null;
 
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'resolved_by' })
   resolver: User | null;
 
-  @Column({ name: 'resolved_at', nullable: true })
+  @Column({ name: 'resolved_at', type: 'timestamp', nullable: true })
   resolvedAt: Date | null;
 
   @Column({ name: 'resolution_reason', type: 'text', nullable: true })
   resolutionNotes: string | null;
 
-  @Column({ name: 'template_id', nullable: true })
+  @Column({ name: 'template_id', type: 'int', nullable: true })
   templateId: number | null;
 
   @Column({

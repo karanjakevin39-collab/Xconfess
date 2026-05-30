@@ -69,10 +69,12 @@ describe('DataExportModule', () => {
           provide: getRepositoryToken(User),
           useFactory: mockRepository,
         },
+        {
+          provide: EmailService,
+          useValue: { sendWelcomeEmail: jest.fn() },
+        },
       ],
     })
-      .overrideProvider(EmailService)
-      .useValue({ sendWelcomeEmail: jest.fn() })
       .compile();
   });
 

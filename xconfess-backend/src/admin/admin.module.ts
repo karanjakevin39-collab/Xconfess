@@ -3,7 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminController } from './admin.controller';
 import { AdminService } from './services/admin.service';
 import { ModerationService } from './services/moderation.service';
-import { Report } from './entities/report.entity';
+// import { Report } from 'src/report/report.entity'
+import { Report } from './entities/report.entity'
 import { AuditLog } from '../audit-log/audit-log.entity';
 import { ModerationNoteTemplate } from '../comment/entities/moderation-note-template.entity';
 import { ModerationTemplateService } from '../comment/moderation-template.service';
@@ -17,6 +18,8 @@ import { UserAnonymousUser } from '../user/entities/user-anonymous-link.entity';
 import { WebSocketLogger } from '../websocket/websocket.logger';
 import { WsRolesGuard } from '../auth/guards/ws-roles.guard';
 import { Reflector } from '@nestjs/core';
+import { Tip } from '../tipping/entities/tip.entity';
+import { AuditLogModule } from '../audit-log/audit-log.module';
 
 @Module({
   imports: [
@@ -27,9 +30,11 @@ import { Reflector } from '@nestjs/core';
       AnonymousConfession,
       User,
       UserAnonymousUser,
+      Tip,
     ]),
     AuthModule,
     UserModule,
+    AuditLogModule,
   ],
   controllers: [AdminController],
   providers: [

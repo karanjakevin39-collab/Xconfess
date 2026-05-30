@@ -105,7 +105,7 @@ describe('API Error Contract (e2e)', () => {
   });
 
   describe('429 Too Many Requests', () => {
-    it('should return standardized 429 error when throttled', async () => {
+    it('should return standardized 429 error when throttled with retryAfter', async () => {
       // We might need to hit a throttled endpoint multiple times
       // Or check if the filter alone works by triggering it
       // For E2E, we'll try to trigger it if the limit is low
@@ -119,11 +119,29 @@ describe('API Error Contract (e2e)', () => {
         if (response.status === 429) {
           expectErrorEnvelope(response, 429);
           expect(response.body.code).toBe('THROTTLED');
+          // Verify retryAfter is a number when rate limited
+          if (response.body.retryAfter !== undefined) {
+            expect(typeof response.body.retryAfter).toBe('number');
+          }
           return;
         }
       }
 
       // console.warn('Could not trigger 429 in E2E test, skipping throttling check');
+    });
+  });
+
+  describe('Rate Limit predictability tests', () => {
+    it('should have predictable error envelope for rate-limited endpoints', async () => {
+      // This verifies the structure of rate limit error responses
+      const response = await request(app.getHttpServer())
+        .post('/reactions')
+        .send({ confessionId: 'test-id', anonymousUserId: 'test-user', emoji: 'like' });
+      // The endpoint may return 404 (route exists but validation fails) or other status
+      // Key point: any 429 response should have the predictable envelope
+      expect(response.body).toHaveProperty('status');
+      expect(response.body).toHaveProperty('code');
+      expect(response.body).toHaveProperty('message');
     });
   });
 });

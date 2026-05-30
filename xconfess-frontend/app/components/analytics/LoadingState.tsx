@@ -1,6 +1,11 @@
 export const AnalyticsLoadingSkeleton = () => {
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div
+      className="min-h-screen bg-black text-white"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading analytics dashboard"
+    >
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header skeleton */}
         <div className="mb-8">

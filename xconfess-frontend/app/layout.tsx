@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import QueryProvider from "./components/providers/QueryProvider";
 import { AuthProvider } from "./lib/providers/AuthProvider";
+import { ThemeProvider } from "./lib/providers/ThemeProvider";
 import { ToastProvider } from "@/app/components/common/Toast";
 import { ErrorBoundary } from "@/app/components/common/ErrorBoundary";
 
@@ -15,6 +16,11 @@ export const metadata: Metadata = {
   generator: "v0.app",
 };
 
+import { NetworkBanner } from "@/app/components/common/NetworkBanner";
+import { WebSocketIndicator } from "@/app/components/common/WebSocketIndicator";
+
+import { NetworkStatusProvider } from "@/app/lib/providers/NetworkStatusProvider";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -24,17 +30,23 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased">
         <ErrorBoundary>
-          <AuthProvider>
-            <QueryProvider>
-              <ToastProvider>
-                {children}
+          <ThemeProvider>
+            <AuthProvider>
+              <NetworkStatusProvider>
+                <QueryProvider>
+                  <ToastProvider>
+                    <NetworkBanner />
+                    <WebSocketIndicator />
+                    {children}
 
-                {/* Onboarding system */}
-                <OnboardingFlow />
-                <HelpButton />
-              </ToastProvider>
-            </QueryProvider>
-          </AuthProvider>
+                    {/* Onboarding system */}
+                    <OnboardingFlow />
+                    <HelpButton />
+                  </ToastProvider>
+                </QueryProvider>
+              </NetworkStatusProvider>
+            </AuthProvider>
+          </ThemeProvider>
         </ErrorBoundary>
       </body>
     </html>

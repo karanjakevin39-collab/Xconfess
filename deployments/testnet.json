@@ -1,8 +1,35 @@
 {
-  "confessionAnchor": {
-    "network": "testnet",
-    "contractId": "CCHDY246UUPY6VUGIDVSK266KXA64CXM6RR2QLTKJD7E7IGV74ZP5XFB",
-    "wasmHash": "1e574de71401e76ed9f13b82b9198686620bcb44f0603427dc8fd3389341d167",
-    "lastUpdated": "2026-01-23"
-  }
+  "contracts": {
+    "anonymous-tipping": {
+      "contract_id": "CAJK27UHTBUGQFUMN5TG5LOQXYODT6NHOY7Z5DVRRMR7CZ4SCIZUE5A3",
+      "sha256": "bd442a078b052086ea404dc532e2e31c23be5ad0ba95905bfce3a99d36cdf84e",
+      "source": "xconfess-deployer",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32v1-none/release/anonymous_tipping.wasm"
+    },
+    "confession-anchor": {
+      "contract_id": "CBFR2MDZBQPTNBIJCT32MTDDQLW2AQNDWNO777F3QT6ANYKTHETQZWD3",
+      "sha256": "c652000471245dffeabef2ccd0329d9b54c47f7c33291d5d3729eb6d0501053a",
+      "source": "xconfess-deployer",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32v1-none/release/confession_anchor.wasm"
+    },
+    "confession-registry": {
+      "contract_id": "CCKT545OQXPLRTY33ED3T6E55SZXM5SFBHKTKQZOXDVX6QDSFIFFQVKI",
+      "sha256": "c55ccbb64cb61cbdb2bf35552c6d43c657101164b967044cb68e6229d6809f72",
+      "source": "xconfess-deployer",
+      "version": "0.1.0",
+      "wasm_file": "target/wasm32v1-none/release/confession_registry.wasm"
+    },
+    "reputation-badges": {
+      "contract_id": "CDD7WPESW54SN6YTXY7PH6JLG6S4MWNREHN5FD6XENAITEDOVLWKIQTC",
+      "sha256": "ca97c7013b236ce05f3b6995ad8b42e89f87cc31d71385527d0aa3aad7e807f8",
+      "source": "xconfess-deployer",
+      "version": "0.0.0",
+      "wasm_file": "target/wasm32v1-none/release/reputation_badges.wasm"
+    }
+  },
+  "generated_at_utc": "2026-05-15T14:23:18Z",
+  "network": "testnet",
+  "target": "wasm32v1-none"
 }

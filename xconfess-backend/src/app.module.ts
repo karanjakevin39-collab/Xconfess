@@ -12,11 +12,9 @@ import { ConfessionModule } from './confession/confession.module';
 import { SearchDiscoveryModule } from './search-discovery/search-discovery.module';
 import { ReactionModule } from './reaction/reaction.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { TerminusModule } from '@nestjs/terminus';
 import { APP_GUARD } from '@nestjs/core';
 import throttleConfig from './config/throttle.config';
-import { RedisHealthIndicator } from './health/redis.health';
-import { SchemaReadinessHealthIndicator } from './health/schema-readiness.health';
+import { HealthModule } from './health/health.module';
 import { MessagesModule } from './messages/messages.module';
 import { AdminModule } from './admin/admin.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -107,7 +105,7 @@ import { BullModule } from '@nestjs/bullmq';
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
-    TerminusModule,
+    HealthModule,
     UserModule,
     AuthModule,
     ConfessionModule,
@@ -128,8 +126,6 @@ import { BullModule } from '@nestjs/bullmq';
   controllers: [AppController],
   providers: [
     AppService,
-    RedisHealthIndicator,
-    SchemaReadinessHealthIndicator,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

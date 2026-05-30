@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import axios from "axios";
 import {
   Card,
   CardContent,
@@ -21,17 +22,69 @@ import {
   type ConfessionFormData,
   ValidationErrors,
 } from "@/app/lib/utils/validation";
-import { useStellarWallet } from "@/app/lib/hooks/useStellarWallet";
+import { useStellarWallet } from "@/lib/hooks/useStellarWallet";
 import { useDrafts, Draft } from "@/app/lib/hooks/useDrafts";
 import { Eye, EyeOff, Send, Loader2, CloudDownload } from "lucide-react";
 import { cn } from "@/app/lib/utils/cn";
 import apiClient from "@/app/lib/api/client";
-import { getErrorMessage } from "@/app/lib/utils/errorHandler";
 import { useGlobalToast } from "@/app/components/common/Toast";
 
 interface EnhancedConfessionFormProps {
   onSubmit?: (data: ConfessionFormData & { stellarTxHash?: string }) => void;
   className?: string;
+}
+
+const TITLE_HINT_ID = "confession-title-hint";
+const BODY_HINT_ID = "confession-body-hint";
+const TITLE_ERROR_ID = "title-error";
+const BODY_ERROR_ID = "body-error";
+
+function getSafeSubmissionErrorMessage(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+
+    if (status === 400 || status === 422) {
+      return "Please review the highlighted fields and try again.";
+    }
+
+    if (status === 429) {
+      return "You are submitting too quickly. Please wait a moment and try again.";
+    }
+
+    if (status === 503) {
+      return "Publishing is temporarily unavailable. Please try again later.";
+    }
+
+    if (status && status >= 500) {
+      return "We could not publish your confession right now. Please try again later.";
+    }
+
+    if (!error.response) {
+      return "We could not reach the server. Check your connection and try again.";
+    }
+  }
+
+  return "We could not publish your confession right now. Please try again.";
+}
+
+function getAnchorFailureMessage(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+
+    if (status === 429) {
+      return "The Stellar network is busy right now. Please wait a moment and try again.";
+    }
+
+    if (status && status >= 500) {
+      return "Unable to anchor this confession right now. Please try again later.";
+    }
+
+    if (!error.response) {
+      return "Unable to reach Stellar right now. Check your connection and try again.";
+    }
+  }
+
+  return "Unable to anchor this confession right now. Please try again.";
 }
 
 export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
@@ -48,8 +101,6 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
   const [stellarTxHash, setStellarTxHash] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
-
-  // Issue #454: State for backend reconciliation
   const [newerCloudDraft, setNewerCloudDraft] = useState<{
     title?: string;
     body?: string;
@@ -58,86 +109,104 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
     scheduledFor?: string;
     updatedAt?: string;
   } | null>(null);
+  const submitSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { anchor } = useStellarWallet();
   const toast = useGlobalToast();
   const { drafts } = useDrafts();
+  const currentValidationErrors = validateConfessionForm({
+    title,
+    body,
+    gender,
+    enableStellarAnchor,
+  });
+  const hasValidationErrors = Object.keys(currentValidationErrors).length > 0;
 
-  // Issue #454: Backend synchronization check
+  const resetComposerState = useCallback(() => {
+    setTitle("");
+    setBody("");
+    setGender(undefined);
+    setEnableStellarAnchor(false);
+    setErrors({});
+    setSubmitError(null);
+    setSubmitSuccess(false);
+    setStellarTxHash(null);
+    setIsPreviewMode(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (submitSuccessTimerRef.current) {
+        clearTimeout(submitSuccessTimerRef.current);
+      }
+    };
+  }, []);
+
   const checkForNewerDrafts = useCallback(async () => {
     try {
-      // Fetch latest drafts from the backend
-      const response = await apiClient.get('/confessions/drafts');
+      const response = await apiClient.get("/confessions/drafts");
       const cloudDrafts = response.data;
-      
+
       if (cloudDrafts && cloudDrafts.length > 0) {
         const latestCloudDraft = cloudDrafts[0];
         const latestLocalDraft = drafts[0];
 
-        // Compare timestamps. If cloud is newer, trigger prompt.
         if (
-          !latestLocalDraft || 
+          !latestLocalDraft ||
           new Date(latestCloudDraft.updatedAt).getTime() > latestLocalDraft.savedAt
         ) {
           setNewerCloudDraft(latestCloudDraft);
         }
       }
     } catch (error) {
-      // Silently fail if endpoint doesn't exist or user isn't logged in
       console.debug("Could not sync drafts from backend:", error);
     }
   }, [drafts]);
 
-  // Issue #454: Trigger reconciliation on component mount and tab focus (device wake)
   useEffect(() => {
     checkForNewerDrafts();
-    
+
     const handleFocus = () => {
       checkForNewerDrafts();
     };
 
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
   }, [checkForNewerDrafts]);
 
   const recoverCloudDraft = () => {
     if (newerCloudDraft) {
       setTitle(newerCloudDraft.title || "");
-      setBody(newerCloudDraft.body || newerCloudDraft.content || ""); 
+      setBody(newerCloudDraft.body || newerCloudDraft.content || "");
       if (newerCloudDraft.gender) setGender(newerCloudDraft.gender as Gender);
-      
-      // Preserve scheduled metadata locally (inform the user)
+
       if (newerCloudDraft.scheduledFor) {
         toast.info("Restored draft with scheduled publish metadata.");
       }
-      
+
       setNewerCloudDraft(null);
     }
   };
 
-  // Removed premature validation effect
   useEffect(() => {
-    // Only clear errors when user starts typing to improve UX
     if (Object.keys(errors).length > 0) {
-      const validationErrors = validateConfessionForm({
-        title,
-        body,
-        gender,
-        enableStellarAnchor,
-      });
-      // Only update if errors are cleared
-      if (Object.keys(validationErrors).length < Object.keys(errors).length) {
-        setErrors(validationErrors);
+      if (
+        Object.keys(currentValidationErrors).length <
+        Object.keys(errors).length
+      ) {
+        setErrors(currentValidationErrors);
       }
     }
-  }, [title, body, gender, enableStellarAnchor, errors]);
+  }, [currentValidationErrors, errors]);
 
   const handleLoadDraft = (draft: Draft) => {
     setTitle(draft.title || "");
     setBody(draft.body);
     setGender(draft.gender);
-    setNewerCloudDraft(null); // Dismiss sync prompt if loading locally
+    setNewerCloudDraft(null);
     setTimeout(() => {
       textareaRef.current?.focus();
     }, 0);
@@ -162,15 +231,9 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
     setSubmitError(null);
     setSubmitSuccess(false);
 
-    const validationErrors = validateConfessionForm({
-      title,
-      body,
-      gender,
-      enableStellarAnchor,
-    });
-
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors);
+    if (hasValidationErrors) {
+      setErrors(currentValidationErrors);
+      setSubmitError("Please review the highlighted fields and try again.");
       return;
     }
 
@@ -185,10 +248,7 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
           txHash = anchorResult.txHash;
           setStellarTxHash(txHash);
         } else {
-          setSubmitError(
-            anchorResult.error || "Failed to anchor confession on Stellar",
-          );
-          setIsSubmitting(false);
+          setSubmitError(getAnchorFailureMessage(anchorResult.error));
           return;
         }
       }
@@ -218,14 +278,20 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
       setBody("");
       setGender(undefined);
       setEnableStellarAnchor(false);
+      setErrors({});
+      setSubmitError(null);
       setStellarTxHash(null);
+      setIsPreviewMode(false);
 
-      setTimeout(() => {
+      if (submitSuccessTimerRef.current) {
+        clearTimeout(submitSuccessTimerRef.current);
+      }
+
+      submitSuccessTimerRef.current = setTimeout(() => {
         setSubmitSuccess(false);
-        setIsPreviewMode(false);
       }, 2000);
     } catch (error) {
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = getSafeSubmissionErrorMessage(error);
       setSubmitError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -233,7 +299,6 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
     }
   };
 
-  // This function closes the when the "esc" key is pressed
   useEffect(() => {
     if (!isPreviewMode) return;
 
@@ -249,50 +314,67 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
     };
 
     window.addEventListener("keydown", closePreviewOnEscPress);
-
     return () => {
       window.removeEventListener("keydown", closePreviewOnEscPress);
     };
   }, [isPreviewMode]);
 
   return (
-    <Card className={cn("w-full", className)}>
-      <CardHeader>
-        <CardTitle>Share Your Confession</CardTitle>
-        <CardDescription>
-          Express yourself anonymously. Your confession will be shared with the
-          community.
+    <Card
+      className={cn(
+        "overflow-hidden rounded-[34px] border border-[var(--border)] bg-[linear-gradient(180deg,var(--surface-strong),var(--surface))] p-0 shadow-[0_30px_90px_-52px_rgba(28,36,48,0.2)]",
+        className
+      )}
+    >
+      <CardHeader className="border-b border-[var(--border)] px-6 pb-6 pt-7 sm:px-8">
+        <p className="eyebrow">Writing desk</p>
+        <CardTitle className="mt-3 text-4xl sm:text-5xl">
+          Share your confession
+        </CardTitle>
+        <CardDescription className="max-w-2xl text-sm leading-8 sm:text-base">
+          Write with privacy, clarity, and restraint. This space is designed to
+          feel more like a journal entry than a social post composer.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        {/* Issue #454: Cloud Draft Reconciliation Prompt */}
+
+      <CardContent className="px-6 py-7 sm:px-8">
         {newerCloudDraft && (
-          <div className="mb-6 p-4 rounded-lg bg-blue-900/20 border border-blue-500/30 flex items-center justify-between">
+          <div className="mb-6 flex flex-col justify-between gap-4 rounded-[24px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-sm text-blue-200 font-medium">A newer draft was saved on another device/tab.</p>
-              <p className="text-xs text-blue-300/70 mt-1">Do you want to load the cloud version to prevent data loss?</p>
+              <p className="font-semibold text-[var(--foreground)]">
+                A newer draft was found from another device or tab.
+              </p>
+              <p className="mt-1 text-sm leading-6 text-[var(--secondary)]">
+                Load it here to avoid losing progress.
+              </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setNewerCloudDraft(null)} className="text-zinc-400 hover:text-white">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setNewerCloudDraft(null)}
+              >
                 Dismiss
               </Button>
-              <Button size="sm" onClick={recoverCloudDraft} className="bg-blue-600 hover:bg-blue-700 text-white">
-                <CloudDownload className="w-4 h-4 mr-2" />
-                Load Cloud Draft
+              <Button size="sm" onClick={recoverCloudDraft}>
+                <CloudDownload className="h-4 w-4" />
+                Load draft
               </Button>
             </div>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Title Field */}
+        <form onSubmit={handleSubmit} className="space-y-7">
           <div>
             <label
               htmlFor="confession-title"
-              className="block text-sm font-medium text-zinc-300 mb-2"
+              className="mb-2 block text-sm font-medium text-[var(--foreground)]"
             >
-              Title <span className="text-zinc-500">(optional)</span>
+              Title <span className="text-[var(--secondary)]">(optional)</span>
             </label>
+            <p id={TITLE_HINT_ID} className="mb-2 text-xs text-[var(--secondary)]">
+              Optional. Keep it under 200 characters.
+            </p>
             <Input
               id="confession-title"
               type="text"
@@ -301,16 +383,12 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
               onChange={(e) => setTitle(e.target.value)}
               error={!!errors.title}
               maxLength={200}
-              aria-describedby={errors.title ? "title-error" : "title-counter"}
-              aria-required="true"
+              aria-describedby={`${TITLE_HINT_ID}${errors.title ? ` ${TITLE_ERROR_ID}` : ""} title-counter`}
+              aria-required="false"
             />
-            <div className="flex items-center justify-between mt-1">
+            <div className="mt-2 flex items-center justify-between">
               {errors.title ? (
-                <p
-                  id="title-error"
-                  className="text-xs text-red-400"
-                  role="alert"
-                >
+                <p id={TITLE_ERROR_ID} className="text-xs text-red-500" role="alert">
                   {errors.title}
                 </p>
               ) : (
@@ -324,14 +402,13 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
             </div>
           </div>
 
-          {/* Body Field */}
           <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <label
                 htmlFor="confession-body"
-                className="block text-sm font-medium text-zinc-300"
+                className="block text-sm font-medium text-[var(--foreground)]"
               >
-                Confession <span className="text-red-400">*</span>
+                Confession <span className="text-red-500">*</span>
               </label>
               <div className="flex items-center gap-2">
                 <DraftManager
@@ -348,7 +425,6 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
                       ? "Switch to edit mode"
                       : "Switch to preview mode"
                   }
-                  className="flex items-center gap-2"
                 >
                   {isPreviewMode ? (
                     <>
@@ -369,36 +445,40 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
               <PreviewPanel title={title} body={body} />
             ) : (
               <>
-                <FormattingToolbar
-                  textareaRef={textareaRef}
-                  onTextChange={handleTextChange}
-                />
+                <p
+                  id={BODY_HINT_ID}
+                  className="mb-2 text-xs leading-6 text-[var(--secondary)]"
+                >
+                  Minimum 10 characters. Markdown formatting is supported.
+                </p>
+                <div className="rounded-[22px] border border-[var(--border)] bg-[var(--surface-muted)] p-2">
+                  <FormattingToolbar
+                    textareaRef={textareaRef}
+                    onTextChange={handleTextChange}
+                  />
+                </div>
                 <textarea
                   id="confession-body"
                   ref={textareaRef}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   placeholder="Share your thoughts, feelings, or experiences..."
+                  aria-invalid={!!errors.body}
                   className={cn(
-                    "mt-2 flex w-full rounded-lg border bg-zinc-900 px-3 py-2 text-base text-white",
-                    "placeholder:text-zinc-500 min-h-[200px] resize-y",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
-                    "focus-visible:ring-zinc-400 disabled:cursor-not-allowed disabled:opacity-50",
+                    "mt-3 flex min-h-[260px] w-full resize-y rounded-[28px] border px-5 py-5 text-[15px] leading-8 text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]",
+                    "bg-[linear-gradient(180deg,var(--surface-strong),var(--surface-muted))]",
+                    "placeholder:text-[color:rgba(111,101,89,0.78)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]",
                     errors.body
-                      ? "border-red-500 focus-visible:ring-red-500"
-                      : "border-zinc-700 focus-visible:border-zinc-600",
+                      ? "border-red-500"
+                      : "border-[var(--border)] focus-visible:border-[var(--primary)]"
                   )}
                   maxLength={5000}
-                  aria-describedby={errors.body ? "body-error" : "body-counter"}
+                  aria-describedby={`${BODY_HINT_ID}${errors.body ? ` ${BODY_ERROR_ID}` : ""} body-counter`}
                   aria-required="true"
                 />
-                <div className="flex items-center justify-between mt-1">
+                <div className="mt-2 flex items-center justify-between">
                   {errors.body ? (
-                    <p
-                      id="body-error"
-                      className="text-xs text-red-400"
-                      role="alert"
-                    >
+                    <p id={BODY_ERROR_ID} className="text-xs text-red-500" role="alert">
                       {errors.body}
                     </p>
                   ) : (
@@ -414,17 +494,21 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
             )}
           </div>
 
-          {/* Gender Selection */}
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">
-              Gender <span className="text-zinc-500">(optional)</span>
+            <label className="mb-3 block text-sm font-medium text-[var(--foreground)]">
+              Gender <span className="text-[var(--secondary)]">(optional)</span>
             </label>
-            <div className="flex flex-wrap gap-4">
+            <div className="flex flex-wrap gap-3">
               {Object.values(Gender).map((g) => (
                 <label
                   key={g}
                   htmlFor={g}
-                  className="cursor-pointer p-2 rounded-lg hover:bg-gray-100 flex items-center gap-2"
+                  className={cn(
+                    "cursor-pointer rounded-full border px-4 py-2 text-sm transition-colors",
+                    gender === g
+                      ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--foreground)]"
+                      : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--secondary)] hover:bg-[var(--surface-strong)]"
+                  )}
                 >
                   <input
                     type="radio"
@@ -433,79 +517,73 @@ export const EnhancedConfessionForm: React.FC<EnhancedConfessionFormProps> = ({
                     value={g}
                     checked={gender === g}
                     onChange={() => setGender(g)}
+                    className="sr-only"
                   />
-                  <span>{g}</span>
+                  {g}
                 </label>
               ))}
             </div>
           </div>
 
-          {/* Stellar Anchoring */}
-          <StellarAnchorToggle
-            enabled={enableStellarAnchor}
-            onToggle={setEnableStellarAnchor}
-            transactionHash={stellarTxHash}
-          />
+          <div className="rounded-[26px] border border-[var(--border)] bg-[var(--surface-muted)] p-4">
+            <StellarAnchorToggle
+              enabled={enableStellarAnchor}
+              onToggle={setEnableStellarAnchor}
+              transactionHash={stellarTxHash}
+            />
+          </div>
 
-          {/* Submit Error */}
           {submitError && (
             <div
-              className="rounded-lg border border-red-500/20 bg-red-500/10 p-3"
+              className="rounded-[22px] border border-red-200 bg-red-50 px-4 py-3"
               role="alert"
+              aria-live="assertive"
             >
-              <p className="text-sm text-red-400">{submitError}</p>
+              <p className="text-sm text-red-700">{submitError}</p>
             </div>
           )}
 
-          {/* Submit Success */}
           {submitSuccess && (
             <div
-              className="rounded-lg border border-green-500/20 bg-green-500/10 p-3"
+              className="rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-3"
               role="alert"
             >
-              <p className="text-sm text-green-400">
+              <p className="text-sm text-emerald-700">
                 Confession submitted successfully!
               </p>
             </div>
           )}
 
-          {/* Submit Button */}
-          <div className="flex justify-end gap-3 pt-4 border-t border-zinc-800">
+          <div className="flex flex-col justify-end gap-3 border-t border-[var(--border)] pt-6 sm:flex-row">
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               onClick={() => {
-                setTitle("");
-                setBody("");
-                setGender(undefined);
-                setEnableStellarAnchor(false);
-                setErrors({});
-                setSubmitError(null);
-                setSubmitSuccess(false);
-                setStellarTxHash(null);
-                setIsPreviewMode(false);
+                if (submitSuccessTimerRef.current) {
+                  clearTimeout(submitSuccessTimerRef.current);
+                }
+                resetComposerState();
               }}
               disabled={isSubmitting}
               className="min-h-[44px]"
             >
-              Clear
+              Clear draft
             </Button>
             <Button
               type="submit"
-              disabled={
-                isSubmitting || !!errors.body || body.trim().length < 10
-              }
-              className="min-w-[120px] min-h-[44px]"
+              disabled={isSubmitting || hasValidationErrors}
+              aria-busy={isSubmitting}
+              className="min-h-[48px] min-w-[160px]"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Submitting...
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Publishing confession...
                 </>
               ) : (
                 <>
-                  <Send className="h-4 w-4 mr-2" />
-                  Submit
+                  <Send className="mr-2 h-4 w-4" />
+                  Publish confession
                 </>
               )}
             </Button>

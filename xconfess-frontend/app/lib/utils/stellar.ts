@@ -6,6 +6,18 @@ import {
   isFreighterInstalled,
 } from "@/lib/wallet/freighterAdapter";
 
+const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer";
+
+export function getStellarExplorerUrl(
+  txHash: string | null | undefined,
+): string | null {
+  if (!txHash) return null;
+
+  const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK || "testnet";
+  const segment = network === "mainnet" ? "public" : "testnet";
+  return `${STELLAR_EXPERT_BASE}/${segment}/tx/${txHash}`;
+}
+
 export function hashConfession(content: string, timestamp?: number): string {
   const ts = timestamp || Date.now();
   const payload = JSON.stringify({ content, timestamp: ts });

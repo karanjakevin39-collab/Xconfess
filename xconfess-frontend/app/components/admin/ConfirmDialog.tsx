@@ -1,9 +1,9 @@
 'use client';
-
-import React from 'react';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -33,28 +33,54 @@ export function ConfirmDialog({
   variant = 'default',
   loading = false,
 }: ConfirmDialogProps) {
-  const handleConfirm = () => {
-    onConfirm();
-  };
+  const requestClose = () => {
+    if (loading) {
+      return;
+    }
 
-  const handleCancel = () => {
     onCancel?.();
     onOpenChange(false);
   };
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      onOpenChange(true);
+      return;
+    }
+
+    requestClose();
+  };
+
+  const handleConfirm = () => {
+    onConfirm();
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="sm:max-w-md"
+        showCloseButton={!loading}
+        onEscapeKeyDown={(event) => {
+          if (loading) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (loading) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="pt-2 text-sm text-gray-600 dark:text-gray-400">
+            {description}
+          </DialogDescription>
         </DialogHeader>
-        <div className="py-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">{description}</p>
-        </div>
-        <div className="flex justify-end gap-3">
+        <DialogFooter className="gap-3 sm:justify-end">
           <button
             type="button"
-            onClick={handleCancel}
+            onClick={requestClose}
             disabled={loading}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -72,7 +98,7 @@ export function ConfirmDialog({
           >
             {loading ? 'Processing...' : confirmLabel}
           </button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -12,6 +12,9 @@ export const getTypeOrmConfig = (
   const syncOptIn = (
     configService.get<string>('TYPEORM_SYNCHRONIZE') || ''
   ).toLowerCase();
+  const migrationsRunSetting = configService.get<string>(
+    'TYPEORM_MIGRATIONS_RUN',
+  );
 
   const isLocalDevEnv =
     nodeEnv === 'development' ||
@@ -23,6 +26,10 @@ export const getTypeOrmConfig = (
 
   // Conservative default: never sync unless explicitly opted-in in local/dev only.
   const synchronize = isLocalDevEnv && TRUE_VALUES.has(syncOptIn);
+  const migrationsRun =
+    migrationsRunSetting === undefined
+      ? !['test', 'ci'].includes(nodeEnv) && !isLocalDevEnv
+      : TRUE_VALUES.has(migrationsRunSetting.toLowerCase());
 
   return {
     type: 'postgres',
@@ -33,8 +40,8 @@ export const getTypeOrmConfig = (
     database: configService.get<string>('DB_NAME'),
     entities: [__dirname + '/../**/*.entity{.ts,.js}'],
 
-    migrations: [__dirname + '/../../migrations/*{.ts,.js}'],
-    migrationsRun: !['test', 'ci'].includes(nodeEnv),
+    migrations: [__dirname + '/../../migrations/[0-9]*{.ts,.js}'],
+    migrationsRun,
 
     synchronize,
     autoLoadEntities: true,

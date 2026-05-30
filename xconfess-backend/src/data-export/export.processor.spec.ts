@@ -7,7 +7,7 @@ import { User } from '../user/entities/user.entity';
 import { DataExportService } from './data-export.service';
 import { EmailService } from '../email/email.service';
 import { ConfigService } from '@nestjs/config';
-import { Job } from 'bull';
+import { Job } from 'bullmq';
 
 describe('ExportProcessor', () => {
   let processor: ExportProcessor;
@@ -73,6 +73,7 @@ describe('ExportProcessor', () => {
   describe('handleExport', () => {
     it('should process a chunked export successfully', async () => {
       const mockJob = {
+        name: 'process-export',
         data: { userId: '1', requestId: 'req-1' },
       } as Job;
 
@@ -86,7 +87,7 @@ describe('ExportProcessor', () => {
         username: 'testuser',
       });
 
-      await processor.handleExport(mockJob);
+      await processor.process(mockJob);
 
       expect(dataExportService.compileUserData).toHaveBeenCalled();
       expect(dataExportService.markExportProcessing).toHaveBeenCalledWith(
@@ -104,6 +105,7 @@ describe('ExportProcessor', () => {
 
     it('should mark export as FAILED if error occurs', async () => {
       const mockJob = {
+        name: 'process-export',
         data: { userId: '1', requestId: 'req-1' },
       } as Job;
 
@@ -111,7 +113,7 @@ describe('ExportProcessor', () => {
         new Error('Test error'),
       );
 
-      await processor.handleExport(mockJob);
+      await processor.process(mockJob);
 
       expect(dataExportService.markExportProcessing).toHaveBeenCalledWith(
         'req-1',

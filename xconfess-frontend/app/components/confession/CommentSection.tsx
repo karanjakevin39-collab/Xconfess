@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { CommentItem } from "./CommentItem";
+import { useMemo, useState } from "react";
 import { Button } from "@/app/components/ui/button";
+import { CommentItem } from "./CommentItem";
+import { CommentSectionSkeleton } from "./LoadingSkeleton";
+import {
+  useCommentsQuery,
+  useCreateCommentMutation,
+} from "@/app/lib/hooks/useComments";
 import { type Comment } from "@/app/lib/types/confession";
-import { AUTH_TOKEN_KEY } from "@/app/lib/api/constants";
-
-const COMMENTS_PAGE_SIZE = 10;
 
 interface CommentSectionProps {
   confessionId: string;
@@ -19,182 +21,107 @@ export function CommentSection({
   isAuthenticated = false,
   onLoginPrompt,
 }: CommentSectionProps) {
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const fetchComments = useCallback(
-    async (pageToLoad = 1) => {
-      // Guard: ignore if a fetch is already in-flight
-      if (loading && pageToLoad !== 1) return;
+  const {
+    comments,
+    error,
+    fetchNextPage,
+    hasMore,
+    isFetchingNextPage,
+    loading,
+    refetch,
+  } = useCommentsQuery(confessionId);
+  const createCommentMutation = useCreateCommentMutation(confessionId);
 
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(
-          `/api/comments/by-confession/${confessionId}?page=${pageToLoad}&limit=${COMMENTS_PAGE_SIZE}`,
-        );
-        if (!res.ok) throw new Error("Failed to load comments");
-        const data = await res.json();
-        const list = data.comments ?? [];
-        if (pageToLoad === 1) {
-          setComments(list);
-        } else {
-          setComments((prev) => [...prev, ...list]);
-        }
-        setHasMore(Boolean(data.hasMore));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load comments");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [confessionId, loading]
+  const topLevelComments = useMemo(
+    () => comments.filter((comment) => comment.parentId == null),
+    [comments],
   );
 
-  useEffect(() => {
-    // load first page
-    fetchComments(1);
-  }, [fetchComments]);
-
-  // Render top-level comments (parentId === null) with client-side pagination
-  const topLevelComments = comments.filter((c) => c.parentId == null);
-  const displayedComments = topLevelComments;
-  const canLoadMore = hasMore;
-
-  // Recursive replies renderer (supports nested replies)
   function renderReplies(parentId: number, depth = 1) {
-    if (depth > 6) return null; // prevent excessive nesting
+    if (depth > 6) return null;
 
-    // First, try to find replies attached directly to the parent comment (backend returns `replies` relation)
-    const parent = comments.find((c) => c.id === parentId) as
-      | Comment
-      | undefined;
-    const attached =
-      (parent as unknown as Record<string, unknown>)?.replies ?? null;
-    const children =
-      Array.isArray(attached) && attached.length > 0
-        ? (attached as Comment[])
-        : comments.filter((c) => c.parentId === parentId);
-    if (!children || children.length === 0) return null;
+    const parent = comments.find((comment) => comment.id === parentId);
+    const attachedReplies = parent?.replies ?? [];
+    const nestedReplies =
+      attachedReplies.length > 0
+        ? attachedReplies
+        : comments.filter((comment) => comment.parentId === parentId);
+
+    if (nestedReplies.length === 0) {
+      return null;
+    }
 
     return (
-      <ul className="mt-3 space-y-3 list-none p-0 m-0">
-        {children.map((child: Comment) => (
-          <li key={child.id}>
-            <CommentItem comment={child} onReply={handleReply} isReply={true} />
-            {renderReplies(child.id, depth + 1)}
+      <ul className="mt-3 min-w-0 list-none space-y-3 p-0">
+        {nestedReplies.map((reply) => (
+          <li key={reply.id} className="min-w-0">
+            <CommentItem comment={reply} onReply={handleReply} isReply />
+            {renderReplies(reply.id, depth + 1)}
           </li>
         ))}
       </ul>
     );
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Guard: ignore if a submit is already in-flight
-    if (submitting) return;
-
-    const trimmed = content.trim();
-    if (!trimmed) return;
-    if (!isAuthenticated) {
-      onLoginPrompt?.();
-      return;
-    }
-
-    setSubmitting(true);
-    setSubmitError(null);
-    const token =
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem(AUTH_TOKEN_KEY)
-        : null;
-
-    try {
-      const res = await fetch(`/api/comments/${confessionId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          content: trimmed,
-          anonymousContextId: "",
-          parentId: replyTo?.id ?? null,
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 401) {
-          onLoginPrompt?.();
-          return;
-        }
-        throw new Error(data.message || "Failed to post comment");
-      }
-
-      const newComment = await res.json();
-      // If this is a reply, we need to add it to the comments list with its parentId
-      // The rendering function will handle nesting based on parentId
-      if (newComment.parentId != null) {
-        // Add the reply to the flat comments list - it will be nested during rendering
-        setComments((prev) => [...prev, newComment]);
-      } else {
-        // Top-level comment — prepend to current page's list
-        setComments((prev) => [newComment, ...prev]);
-      }
-      setContent("");
-      setReplyTo(null);
-    } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Failed to post comment");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const handleReply = (comment: Comment) => {
     setReplyTo(comment);
-    setContent(`@Anonymous `);
+    setContent(`@${comment.author || "Anonymous"} `);
     document.getElementById("comment-form")?.scrollIntoView({
       behavior: "smooth",
       block: "center",
     });
   };
 
-  const handleLoadMore = () => {
-    // Guard: ignore if a fetch is already in-flight
-    if (loading) return;
-    const next = page + 1;
-    setPage(next);
-    fetchComments(next);
-  };
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
 
-  const handleRetry = () => {
-    // Guard: ignore if a fetch is already in-flight
-    if (loading) return;
-    fetchComments(1);
+    if (createCommentMutation.isPending) return;
+
+    const trimmed = content.trim();
+    if (!trimmed) return;
+
+    if (!isAuthenticated) {
+      onLoginPrompt?.();
+      return;
+    }
+
+    setSubmitError(null);
+
+    try {
+      await createCommentMutation.mutateAsync({
+        content: trimmed,
+        anonymousContextId: "",
+        parentId: replyTo?.id ?? null,
+      });
+
+      setContent("");
+      setReplyTo(null);
+    } catch (mutationError) {
+      setSubmitError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Failed to post comment",
+      );
+    }
   };
 
   return (
     <section
       id="comments"
-      className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6"
+      className="max-w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:p-6"
       aria-labelledby="comments-heading"
     >
       <h2
         id="comments-heading"
-        className="text-lg font-semibold text-white mb-4"
+        className="mb-4 text-lg font-semibold text-white"
       >
         Comments ({comments.length})
       </h2>
 
-      {/* Add comment form */}
       <form
         id="comment-form"
         onSubmit={handleSubmit}
@@ -203,42 +130,51 @@ export function CommentSection({
         aria-label="Add a comment"
       >
         {replyTo && (
-          <div className="mb-2 flex items-center justify-between rounded bg-zinc-800/50 px-3 py-2 text-sm text-zinc-400">
-            <span>Replying</span>
+          <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2 rounded bg-zinc-800/50 px-3 py-2 text-sm text-zinc-400">
+            <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+              Replying to {replyTo.author || "Anonymous"}
+            </span>
             <button
               type="button"
               onClick={() => {
                 setReplyTo(null);
                 setContent("");
               }}
-              className="text-zinc-500 hover:text-zinc-300"
+              className="min-h-10 shrink-0 touch-manipulation text-zinc-500 hover:text-zinc-300"
             >
               Cancel
             </button>
           </div>
         )}
+
         <textarea
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={(event) => setContent(event.target.value)}
           placeholder={
             isAuthenticated ? "Write a comment..." : "Sign in to comment"
           }
           disabled={!isAuthenticated}
           rows={3}
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-zinc-200 placeholder-zinc-500 focus:border-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 disabled:opacity-60 resize-y min-h-20"
+          className="min-h-20 w-full min-w-0 resize-y rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-zinc-200 placeholder-zinc-500 focus:border-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 disabled:opacity-60"
           maxLength={2000}
           aria-label="Comment text"
         />
+
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-zinc-500">{content.length}/2000</span>
           <Button
             type="submit"
-            disabled={submitting || !content.trim() || !isAuthenticated}
+            disabled={
+              createCommentMutation.isPending ||
+              !content.trim() ||
+              !isAuthenticated
+            }
             size="sm"
           >
-            {submitting ? "Posting..." : "Post comment"}
+            {createCommentMutation.isPending ? "Posting..." : "Post comment"}
           </Button>
         </div>
+
         {submitError && (
           <p className="mt-2 text-sm text-red-400" role="alert">
             {submitError}
@@ -246,28 +182,18 @@ export function CommentSection({
         )}
       </form>
 
-      {/* Loading */}
-      {loading && (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-20 rounded-lg bg-zinc-800 animate-pulse"
-              aria-hidden
-            />
-          ))}
-        </div>
-      )}
+      {loading && comments.length === 0 && <CommentSectionSkeleton />}
 
-      {/* Error */}
       {!loading && error && (
-        <div className="rounded-lg border border-red-900/50 bg-red-900/10 p-4 text-red-300 text-sm">
-          {error}
+        <div className="rounded-lg border border-red-900/50 bg-red-900/10 p-4 text-sm text-red-300">
+          {error.message || "Failed to load comments"}
           <Button
             variant="outline"
             size="sm"
             className="mt-2"
-            onClick={handleRetry}
+            onClick={() => {
+              void refetch();
+            }}
             disabled={loading}
           >
             Try again
@@ -275,40 +201,42 @@ export function CommentSection({
         </div>
       )}
 
-      {/* Comment list */}
-      {!loading && !error && (
+      {!error && comments.length > 0 && (
         <>
-          <ul className="space-y-3 list-none p-0 m-0">
-            {displayedComments.map((comment) => (
-              <li key={comment.id}>
+          <ul className="m-0 min-w-0 list-none space-y-3 p-0">
+            {topLevelComments.map((comment) => (
+              <li key={comment.id} className="min-w-0">
                 <CommentItem
                   comment={comment}
                   onReply={handleReply}
                   isReply={false}
                 />
-                {/* Render nested replies recursively */}
                 {renderReplies(comment.id, 1)}
               </li>
             ))}
           </ul>
-          {displayedComments.length === 0 && (
-            <p className="text-zinc-500 text-sm py-4">
-              No comments yet. Be the first to comment.
-            </p>
-          )}
-          {canLoadMore && (
+
+          {hasMore && (
             <div className="mt-4 flex justify-center">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={handleLoadMore}
-                disabled={loading}
+                onClick={() => {
+                  void fetchNextPage();
+                }}
+                disabled={isFetchingNextPage}
               >
-                {loading ? "Loading..." : "Load more comments"}
+                {isFetchingNextPage ? "Loading..." : "Load more comments"}
               </Button>
             </div>
           )}
         </>
+      )}
+
+      {!loading && !error && comments.length === 0 && (
+        <p className="py-4 text-sm text-zinc-500">
+          No comments yet. Be the first to comment.
+        </p>
       )}
     </section>
   );

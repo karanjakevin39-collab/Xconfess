@@ -3,8 +3,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi, Report } from "@/app/lib/api/admin";
+import { queryKeys } from "@/app/lib/api/queryKeys";
 import ReportDetail from "./ReportDetail";
-import { exportToCSV } from "@/app/lib/utils/csvExport";
+import { Button } from "@/app/components/ui/button";
+import { useExportCSV } from "@/app/lib/hooks/useExportCSV";
+import { ExportCsvButton } from "@/app/components/admin/ExportCsvButton";
+import { useAdminConfirmation } from "@/app/components/admin/useAdminConfirmation";
 
 export default function ReportList() {
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
@@ -16,16 +20,19 @@ export default function ReportList() {
   const limit = 20;
 
   const queryClient = useQueryClient();
+  const { triggerExport, isExporting: isExportingCsv } = useExportCSV({ label: 'reports' });
+  const { openConfirmation, confirmDialog } = useAdminConfirmation();
+
+  const reportListKey = queryKeys.admin.reports.list({
+    statusFilter,
+    typeFilter,
+    startDate,
+    endDate,
+    page,
+  });
 
   const { data, isLoading } = useQuery({
-    queryKey: [
-      "admin-reports",
-      statusFilter,
-      typeFilter,
-      startDate,
-      endDate,
-      page,
-    ],
+    queryKey: reportListKey,
     queryFn: () =>
       adminApi.getReports({
         status: statusFilter !== "all" ? statusFilter : undefined,
@@ -37,82 +44,13 @@ export default function ReportList() {
       }),
   });
 
-  const resolveMutation = useMutation({
-    mutationFn: ({ id, notes }: { id: string; notes?: string }) =>
-      adminApi.resolveReport(id, notes),
-    onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ["admin-reports"] });
-      const previousData = queryClient.getQueryData(["admin-reports"]);
-      queryClient.setQueriesData(
-        { queryKey: ["admin-reports"] },
-        (old: any) => {
-          if (!old?.reports) return old;
-          return {
-            ...old,
-            reports: old.reports.map((r: Report) =>
-              r.id === id ? { ...r, status: "resolved" } : r,
-            ),
-          };
-        },
-      );
-      return { previousData };
-    },
-    onError: (err, newReport, context) => {
-      if (context?.previousData) {
-        queryClient.setQueriesData(
-          { queryKey: ["admin-reports"] },
-          context.previousData,
-        );
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
-      setSelectedReport(null);
-    },
-  });
-
-  const dismissMutation = useMutation({
-    mutationFn: ({ id, notes }: { id: string; notes?: string }) =>
-      adminApi.dismissReport(id, notes),
-    onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ["admin-reports"] });
-      const previousData = queryClient.getQueryData(["admin-reports"]);
-      queryClient.setQueriesData(
-        { queryKey: ["admin-reports"] },
-        (old: any) => {
-          if (!old?.reports) return old;
-          return {
-            ...old,
-            reports: old.reports.map((r: Report) =>
-              r.id === id ? { ...r, status: "dismissed" } : r,
-            ),
-          };
-        },
-      );
-      return { previousData };
-    },
-    onError: (err, newReport, context) => {
-      if (context?.previousData) {
-        queryClient.setQueriesData(
-          { queryKey: ["admin-reports"] },
-          context.previousData,
-        );
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
-      setSelectedReport(null);
-    },
-  });
-
   const bulkResolveMutation = useMutation({
-    mutationFn: ({ ids, notes }: { ids: string[]; notes?: string }) =>
-      adminApi.bulkResolveReports(ids, notes),
+    mutationFn: ({ ids }: { ids: string[] }) => adminApi.bulkResolveReports(ids),
     onMutate: async ({ ids }) => {
-      await queryClient.cancelQueries({ queryKey: ["admin-reports"] });
-      const previousData = queryClient.getQueryData(["admin-reports"]);
+      await queryClient.cancelQueries({ queryKey: queryKeys.admin.reports.all() });
+      const snapshots = queryClient.getQueriesData({ queryKey: queryKeys.admin.reports.all() });
       queryClient.setQueriesData(
-        { queryKey: ["admin-reports"] },
+        { queryKey: queryKeys.admin.reports.all() },
         (old: any) => {
           if (!old?.reports) return old;
           return {
@@ -123,18 +61,15 @@ export default function ReportList() {
           };
         },
       );
-      return { previousData };
+      return { snapshots };
     },
-    onError: (err, variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueriesData(
-          { queryKey: ["admin-reports"] },
-          context.previousData,
-        );
-      }
+    onError: (_err, _vars, context) => {
+      context?.snapshots?.forEach(([key, data]) => {
+        queryClient.setQueryData(key, data);
+      });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-reports"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.reports.all() });
     },
   });
 
@@ -152,10 +87,18 @@ export default function ReportList() {
 
   const handleBulkResolve = () => {
     if (selectedIds.size === 0) return;
-    if (confirm(`Resolve ${selectedIds.size} selected reports?`)) {
-      bulkResolveMutation.mutate({ ids: Array.from(selectedIds) });
-      setSelectedIds(new Set());
-    }
+    const reportIds = Array.from(selectedIds);
+    openConfirmation({
+      title: 'Resolve selected reports?',
+      description: `This will mark ${reportIds.length} selected reports as resolved.`,
+      confirmLabel: 'Resolve',
+      action: () => bulkResolveMutation.mutateAsync({ ids: reportIds }),
+      successMessage: 'Selected reports resolved.',
+      errorMessage: 'Failed to resolve selected reports.',
+      onSuccess: () => {
+        setSelectedIds(new Set());
+      },
+    });
   };
 
   if (isLoading) {
@@ -164,9 +107,29 @@ export default function ReportList() {
     );
   }
 
+
   const reports = data?.reports || [];
   const total = data?.total || 0;
   const totalPages = Math.ceil(total / limit);
+
+  const isFilterActive =
+    statusFilter !== 'all' || typeFilter !== 'all' || startDate !== '' || endDate !== '';
+
+  const statusClassMap: Record<string, string> = {
+    pending:
+      'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100',
+    reviewing:
+      'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-100',
+    resolved:
+      'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100',
+    dismissed:
+      'px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
+  };
+
+  const humanizeStatus = (s: string) => {
+    if (!s) return s;
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
 
   if (selectedReport) {
     const report = reports.find((r: Report) => r.id === selectedReport);
@@ -175,12 +138,7 @@ export default function ReportList() {
         <ReportDetail
           report={report}
           onBack={() => setSelectedReport(null)}
-          onResolve={(notes) =>
-            resolveMutation.mutate({ id: report.id, notes })
-          }
-          onDismiss={(notes) =>
-            dismissMutation.mutate({ id: report.id, notes })
-          }
+          onActionSuccess={() => setSelectedReport(null)}
         />
       );
     }
@@ -188,6 +146,8 @@ export default function ReportList() {
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
+
       {/* Filters */}
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-5">
@@ -262,9 +222,9 @@ export default function ReportList() {
             />
           </div>
           <div className="flex items-end gap-2">
-            <button
+            <ExportCsvButton
               onClick={() => {
-                const exportData = reports.map((r: Report) => ({
+                const exportData: Record<string, unknown>[] = reports.map((r: Report) => ({
                   id: r.id,
                   type: r.type,
                   status: r.status,
@@ -275,111 +235,135 @@ export default function ReportList() {
                     ? new Date(r.resolvedAt).toLocaleString()
                     : "",
                 }));
-                exportToCSV(
+                triggerExport(
                   exportData,
                   `reports-${new Date().toISOString().split("T")[0]}.csv`,
                 );
               }}
-              className="bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700 text-sm"
-            >
-              Export CSV
-            </button>
+              isExporting={isExportingCsv}
+              label="Export Reports CSV"
+            />
             {selectedIds.size > 0 && (
-              <button
+              <Button
+                variant="default"
+                size="sm"
                 onClick={handleBulkResolve}
+                aria-label={`Resolve ${selectedIds.size} selected reports`}
                 className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 text-sm"
               >
                 Resolve Selected ({selectedIds.size})
-              </button>
+              </Button>
             )}
           </div>
         </div>
       </div>
 
       {/* Reports Table */}
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-700">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                <input
-                  type="checkbox"
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedIds(new Set(reports.map((r: Report) => r.id)));
-                    } else {
-                      setSelectedIds(new Set());
-                    }
-                  }}
-                  className="rounded border-gray-300"
-                />
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Type
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Reporter
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Created
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-            {reports.map((report: Report) => (
-              <tr
-                key={report.id}
-                className="hover:bg-gray-50 dark:hover:bg-gray-700"
-              >
-                <td className="px-6 py-4 whitespace-nowrap">
+      {/* Empty state when filters match nothing */}
+      {!isLoading && reports.length === 0 && isFilterActive ? (
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-8 text-center">
+          <p className="text-lg font-medium text-gray-900 dark:text-white">No reports match your filters</p>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Try clearing filters to see all reports.</p>
+          <div className="mt-4 flex justify-center">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => {
+                setStatusFilter('all');
+                setTypeFilter('all');
+                setStartDate('');
+                setEndDate('');
+                setPage(1);
+              }}
+            >
+              Clear filters
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead className="bg-gray-50 dark:bg-gray-700">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   <input
                     type="checkbox"
-                    checked={selectedIds.has(report.id)}
-                    onChange={() => toggleSelect(report.id)}
+                    aria-label="Select all reports"
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedIds(new Set(reports.map((r: Report) => r.id)));
+                      } else {
+                        setSelectedIds(new Set());
+                      }
+                    }}
                     className="rounded border-gray-300"
                   />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                  {report.type}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span
-                    className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      report.status === "pending"
-                        ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100"
-                        : report.status === "resolved"
-                          ? "bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100"
-                          : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200"
-                    }`}
-                  >
-                    {report.status}
-                  </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                  {report.reporter?.username || "Anonymous"}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                  {new Date(report.createdAt).toLocaleDateString()}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  <button
-                    onClick={() => setSelectedReport(report.id)}
-                    className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
-                  >
-                    View
-                  </button>
-                </td>
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Reporter
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  Created
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider sticky right-0 bg-gray-50 dark:bg-gray-700 after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-gray-300 dark:after:bg-gray-600">
+                  Actions
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+              {reports.map((report: Report) => (
+                <tr
+                  key={report.id}
+                  className="hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select report ${report.id}`}
+                      checked={selectedIds.has(report.id)}
+                      onChange={() => toggleSelect(report.id)}
+                      className="rounded border-gray-300"
+                    />
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {report.type}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={statusClassMap[report.status] ?? statusClassMap['dismissed']}>
+                      {humanizeStatus(report.status)}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    {report.reporter?.username || "Anonymous"}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    {new Date(report.createdAt).toLocaleDateString()}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium sticky right-0 bg-white dark:bg-gray-800 after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-gray-200 dark:after:bg-gray-700">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedReport(report.id)}
+                      aria-label={`View report ${report.id}`}
+                      className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 p-0"
+                    >
+                      View
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+      )}
 
       {/* Pagination */}
       {totalPages > 1 && (
@@ -389,20 +373,24 @@ export default function ReportList() {
             of {total} results
           </div>
           <div className="flex gap-2">
-            <button
+            <Button
+              type="button"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
+              aria-label="Previous page"
               className="px-4 py-2 border rounded-md disabled:opacity-50"
             >
               Previous
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
+              aria-label="Next page"
               className="px-4 py-2 border rounded-md disabled:opacity-50"
             >
               Next
-            </button>
+            </Button>
           </div>
         </div>
       )}

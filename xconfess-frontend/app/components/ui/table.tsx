@@ -1,7 +1,7 @@
 import React from 'react';
 
 export const Table = ({ children }: { children: React.ReactNode }) => (
-  <div className="w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+  <div className="w-full overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl">
     <table className="min-w-full divide-y divide-zinc-800">{children}</table>
   </div>
 );

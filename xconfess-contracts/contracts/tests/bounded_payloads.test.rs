@@ -2,6 +2,10 @@ use soroban_sdk::{Env, String as SorobanString};
 use xconfess_contract::pagination::confession::{create, MAX_CONFESSION_CONTENT_LEN};
 use anonymous_tipping::AnonymousTipping;
 use soroban_sdk::testutils::Address as _;
+use confession_anchor::{ConfessionAnchor, ConfessionAnchorClient};
+use confession_registry::{
+    ConfessionRegistry, ConfessionRegistryClient, MAX_AUTHOR_CONFESSIONS_PER_AUTHOR,
+};
 
 #[test]
 fn confession_content_exact_limit_succeeds() {
@@ -61,6 +65,75 @@ fn settlement_proof_metadata_limit_plus_one_rejected() {
     );
 
     let _ = AnonymousTipping::send_tip_with_proof(env, recipient, 10, Some(metadata));
+}
+
+#[test]
+fn anchor_pause_reason_exact_limit_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(ConfessionAnchor, ());
+    let client = ConfessionAnchorClient::new(&env, &contract_id);
+    let owner = soroban_sdk::Address::generate(&env);
+    let reason = SorobanString::from_str(&env, &"r".repeat(128));
+
+    client.initialize(&owner);
+
+    client.pause(&owner, &reason);
+}
+
+#[test]
+#[should_panic(expected = "pause reason too long")]
+fn anchor_pause_reason_limit_plus_one_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(ConfessionAnchor, ());
+    let client = ConfessionAnchorClient::new(&env, &contract_id);
+    let owner = soroban_sdk::Address::generate(&env);
+    let reason = SorobanString::from_str(&env, &"r".repeat(129));
+
+    client.initialize(&owner);
+
+    let _ = client.pause(&owner, &reason);
+}
+
+#[test]
+fn registry_author_index_exact_limit_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(ConfessionRegistry, ());
+    let client = ConfessionRegistryClient::new(&env, &contract_id);
+    let admin = soroban_sdk::Address::generate(&env);
+    let author = soroban_sdk::Address::generate(&env);
+
+    client.initialize(&admin);
+
+    for seed in 0..MAX_AUTHOR_CONFESSIONS_PER_AUTHOR {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed as u8;
+        let hash = soroban_sdk::BytesN::from_array(&env, &bytes);
+        let id = client.create_confession(&author, &hash, &(1_000 + seed as u64));
+        assert_eq!(id, seed as u64 + 1);
+    }
+}
+
+#[test]
+#[should_panic(expected = "registry payload too long")]
+fn registry_author_index_limit_plus_one_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(ConfessionRegistry, ());
+    let client = ConfessionRegistryClient::new(&env, &contract_id);
+    let admin = soroban_sdk::Address::generate(&env);
+    let author = soroban_sdk::Address::generate(&env);
+
+    client.initialize(&admin);
+
+    for seed in 0..=MAX_AUTHOR_CONFESSIONS_PER_AUTHOR {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed as u8;
+        let hash = soroban_sdk::BytesN::from_array(&env, &bytes);
+        let _ = client.create_confession(&author, &hash, &(1_000 + seed as u64));
+    }
 }
 
 // ── Amount boundary table ────────────────────────────────────────────────────

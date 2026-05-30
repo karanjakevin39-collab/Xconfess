@@ -37,4 +37,6 @@ export interface Comment {
   author: string;
   confessionId?: string;
   parentId?: number | null;
+  replies?: Comment[];
+  isOptimistic?: boolean;
 }

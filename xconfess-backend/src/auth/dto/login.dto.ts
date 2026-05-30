@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 /**
  * Canonical payload for all login routes (POST /auth/login, POST /users/login).
@@ -12,6 +13,10 @@ import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
  * leaks policy information to an attacker enumerating accounts.
  */
 export class LoginDto {
+  @ApiProperty({
+    description: 'Registered e-mail address (normalised to lower-case)',
+    example: 'alice@example.com',
+  })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
@@ -19,6 +24,10 @@ export class LoginDto {
   @IsNotEmpty({ message: 'email must not be empty' })
   email!: string;
 
+  @ApiProperty({
+    description: 'Account password',
+    example: 'Str0ng!Pass#1',
+  })
   @IsString()
   @IsNotEmpty({ message: 'password must not be empty' })
   password!: string;

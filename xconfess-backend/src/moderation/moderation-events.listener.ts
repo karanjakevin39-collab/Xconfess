@@ -63,7 +63,7 @@ export class ModerationEventsListener {
         },
         context: { userId: event.userId || null },
       });
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(
         `Failed to escalate high-severity moderation event: ${err.message}`,
       );
@@ -99,7 +99,7 @@ export class ModerationEventsListener {
         },
         context: { userId: event.userId || null },
       });
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(
         `Failed to escalate requires-review moderation event: ${err.message}`,
       );

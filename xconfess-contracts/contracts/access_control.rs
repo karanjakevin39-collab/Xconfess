@@ -35,7 +35,7 @@
 //! | `admin_revoked`     | `{ address: Address }`        |
 //! | `ownership_xfer`    | `{ from: Address, to: Address }` |
 
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Map};
+use soroban_sdk::{contractevent, contracttype, Address, Env, Map, String};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage keys
@@ -47,6 +47,15 @@ use soroban_sdk::{contracttype, symbol_short, Address, Env, Map};
 pub enum AccessKey {
     Owner,
     Admins,
+    Operators,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Role {
+    Owner,
+    Admin,
+    Operator,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +86,40 @@ pub enum AccessError {
     CannotRevokeLastAdmin = 7,
     /// Cannot transfer ownership to same address (code 8).
     InvalidOwnershipTransfer = 8,
+    /// Target address is already an operator (code 9).
+    AlreadyOperator = 9,
+    /// Target address is not an operator (cannot revoke) (code 10).
+    NotOperator = 10,
+}
+
+#[contractevent(topics = ["adm_grant"], data_format = "single-value")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdminGrantedEvent {
+    #[topic]
+    address: Address,
+}
+
+#[contractevent(topics = ["adm_revke"], data_format = "single-value")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdminRevokedEvent {
+    #[topic]
+    address: Address,
+}
+
+#[contractevent(topics = ["own_xfer"], data_format = "single-value")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnershipTransferredEvent {
+    #[topic]
+    new_owner: Address,
+    previous_owner: Address,
+}
+
+#[contractevent(topics = ["gov_inv"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GovernanceInvariantEvent {
+    operation: String,
+    reason: String,
+    caller: Address,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +138,11 @@ pub fn init_owner(env: &Env, owner: &Address) -> Result<(), AccessError> {
 
     let admins: Map<Address, ()> = Map::new(env);
     env.storage().instance().set(&AccessKey::Admins, &admins);
+
+    let operators: Map<Address, ()> = Map::new(env);
+    env.storage()
+        .instance()
+        .set(&AccessKey::Operators, &operators);
 
     Ok(())
 }
@@ -128,6 +176,25 @@ pub fn is_admin(env: &Env, addr: &Address) -> bool {
     admins.contains_key(addr.clone())
 }
 
+/// Returns `true` if `addr` is in the operator set.
+pub fn is_operator(env: &Env, addr: &Address) -> bool {
+    let operators: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&AccessKey::Operators)
+        .unwrap_or_else(|| Map::new(env));
+    operators.contains_key(addr.clone())
+}
+
+/// Return true when `addr` has the requested role.
+pub fn has_role(env: &Env, addr: &Address, role: Role) -> Result<bool, AccessError> {
+    match role {
+        Role::Owner => is_owner(env, addr),
+        Role::Admin => Ok(is_admin(env, addr)),
+        Role::Operator => Ok(is_operator(env, addr)),
+    }
+}
+
 /// Returns `true` if `addr` is the owner OR is an explicit admin.
 /// Use this as the guard predicate for moderation-level actions (e.g. `resolve`).
 pub fn is_authorized(env: &Env, addr: &Address) -> Result<bool, AccessError> {
@@ -142,7 +209,17 @@ pub fn count_admins(env: &Env) -> u32 {
         .instance()
         .get(&AccessKey::Admins)
         .unwrap_or_else(|| Map::new(env));
-    admins.len() as u32
+    admins.len()
+}
+
+/// Returns the total number of active operators.
+pub fn count_operators(env: &Env) -> u32 {
+    let operators: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&AccessKey::Operators)
+        .unwrap_or_else(|| Map::new(env));
+    operators.len()
 }
 
 /// Returns the total number of authorized addresses (owner + admins).
@@ -181,6 +258,17 @@ pub fn require_admin_or_owner(env: &Env, caller: &Address) -> Result<(), AccessE
     Ok(())
 }
 
+/// Require owner OR admin OR operator role for operational routines.
+pub fn require_operator_or_admin_or_owner(env: &Env, caller: &Address) -> Result<(), AccessError> {
+    caller.require_auth();
+
+    if is_owner(env, caller)? || is_admin(env, caller) || is_operator(env, caller) {
+        return Ok(());
+    }
+
+    Err(AccessError::NotAuthorized)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Role mutations (owner-only)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,10 +297,10 @@ pub fn internal_grant_admin(env: &Env, target: &Address) -> Result<(), AccessErr
     admins.set(target.clone(), ());
     env.storage().instance().set(&AccessKey::Admins, &admins);
 
-    env.events().publish(
-        (symbol_short!("adm_grant"), target.clone()),
-        target.clone(),
-    );
+    AdminGrantedEvent {
+        address: target.clone(),
+    }
+    .publish(env);
 
     Ok(())
 }
@@ -224,7 +312,7 @@ pub fn internal_grant_admin(env: &Env, target: &Address) -> Result<(), AccessErr
 /// * Panics with `AccessError::CannotDemoteOwner` if `target` is the owner
 ///   (the owner is always implicitly authorized; removing them from the admin
 ///   map would create misleading authorization state).
-/// * Panics with `AccessError::CannotRevokeLastAdmin` if revoking would leave 
+/// * Panics with `AccessError::CannotRevokeLastAdmin` if revoking would leave
 ///   the contract with zero authorized addresses.
 /// * Emits `admin_revoked` event.
 pub fn revoke_admin(env: &Env, caller: &Address, target: &Address) -> Result<(), AccessError> {
@@ -247,10 +335,12 @@ pub fn internal_revoke_admin(
 
     let current_admins = count_admins(env);
     if current_admins <= 1 {
-        env.events().publish(
-            (symbol_short!("gov_inv"),),
-            ("revoke_admin", "Cannot revoke last admin", caller.clone()),
-        );
+        GovernanceInvariantEvent {
+            operation: String::from_str(env, "revoke_admin"),
+            reason: String::from_str(env, "Cannot revoke last admin"),
+            caller: caller.clone(),
+        }
+        .publish(env);
         return Err(AccessError::CannotRevokeLastAdmin);
     }
 
@@ -263,10 +353,10 @@ pub fn internal_revoke_admin(
     admins.remove(target.clone());
     env.storage().instance().set(&AccessKey::Admins, &admins);
 
-    env.events().publish(
-        (symbol_short!("adm_revke"), target.clone()),
-        target.clone(),
-    );
+    AdminRevokedEvent {
+        address: target.clone(),
+    }
+    .publish(env);
 
     Ok(())
 }
@@ -289,10 +379,7 @@ pub fn transfer_ownership(
     internal_transfer_ownership(env, new_owner)
 }
 
-pub fn internal_transfer_ownership(
-    env: &Env,
-    new_owner: &Address,
-) -> Result<(), AccessError> {
+pub fn internal_transfer_ownership(env: &Env, new_owner: &Address) -> Result<(), AccessError> {
     let old_owner = get_owner(env)?;
 
     if old_owner == *new_owner {
@@ -301,10 +388,57 @@ pub fn internal_transfer_ownership(
 
     env.storage().instance().set(&AccessKey::Owner, new_owner);
 
-    env.events().publish(
-        (symbol_short!("own_xfer"), new_owner.clone()),
-        old_owner,
-    );
+    OwnershipTransferredEvent {
+        new_owner: new_owner.clone(),
+        previous_owner: old_owner,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Grant `target` the operator role.
+/// Caller must be owner or admin.
+pub fn grant_operator(env: &Env, caller: &Address, target: &Address) -> Result<(), AccessError> {
+    require_admin_or_owner(env, caller)?;
+
+    if is_operator(env, target) {
+        return Err(AccessError::AlreadyOperator);
+    }
+
+    let mut operators: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&AccessKey::Operators)
+        .unwrap_or_else(|| Map::new(env));
+
+    operators.set(target.clone(), ());
+    env.storage()
+        .instance()
+        .set(&AccessKey::Operators, &operators);
+
+    Ok(())
+}
+
+/// Revoke `target`'s operator role.
+/// Caller must be owner or admin.
+pub fn revoke_operator(env: &Env, caller: &Address, target: &Address) -> Result<(), AccessError> {
+    require_admin_or_owner(env, caller)?;
+
+    if !is_operator(env, target) {
+        return Err(AccessError::NotOperator);
+    }
+
+    let mut operators: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&AccessKey::Operators)
+        .unwrap_or_else(|| Map::new(env));
+
+    operators.remove(target.clone());
+    env.storage()
+        .instance()
+        .set(&AccessKey::Operators, &operators);
 
     Ok(())
 }

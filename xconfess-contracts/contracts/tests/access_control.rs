@@ -44,7 +44,7 @@ fn setup_with_owner() -> (Env, XConfessContractClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, XConfessContract);
+    let contract_id = env.register(XConfessContract, ());
     let client: XConfessContractClient<'static> =
         XConfessContractClient::new(&env, &contract_id);
 

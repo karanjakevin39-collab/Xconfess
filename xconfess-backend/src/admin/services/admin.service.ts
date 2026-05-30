@@ -5,8 +5,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { Report, ReportStatus, ReportType } from '../entities/report.entity';
+import { EntityManager, In, Repository } from 'typeorm';
+import { Report, ReportStatus, ReportType } from '../entities/report.entity'
 import { AnonymousConfession } from '../../confession/entities/confession.entity';
 import { User, UserRole } from '../../user/entities/user.entity';
 import { ModerationService } from './moderation.service';
@@ -17,6 +17,21 @@ import { decryptConfession } from '../../utils/confession-encryption';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserAnonymousUser } from '../../user/entities/user-anonymous-link.entity';
 import { ConfigService } from '@nestjs/config';
+import { Tip } from '../../tipping/entities/tip.entity';
+
+export interface BulkResolveOutcome {
+  id: string;
+  outcome: 'resolved' | 'skipped' | 'not_found';
+  previousStatus?: ReportStatus;
+}
+
+export interface BulkResolveResult {
+  requested: number;
+  resolved: number;
+  skipped: number;
+  notFound: number;
+  outcomes: BulkResolveOutcome[];
+}
 
 @Injectable()
 export class AdminService {
@@ -44,6 +59,8 @@ export class AdminService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserAnonymousUser)
     private readonly userAnonRepository: Repository<UserAnonymousUser>,
+    @InjectRepository(Tip)
+    private readonly tipRepository: Repository<Tip>,
     private readonly moderationService: ModerationService,
     private readonly moderationTemplateService: ModerationTemplateService,
     private readonly configService: ConfigService,
@@ -52,6 +69,12 @@ export class AdminService {
 
   private get aesKey(): string {
     return this.configService.get<string>('app.confessionAesKey', '');
+  }
+
+  private async runInModerationTransaction<T>(
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    return this.reportRepository.manager.transaction(work);
   }
 
   // Reports
@@ -125,40 +148,50 @@ export class AdminService {
     templateId?: number | null,
     request?: Request,
   ): Promise<Report> {
-    const report = await this.getReportById(id);
-
-    if (report.status === ReportStatus.RESOLVED) {
-      throw new BadRequestException('Report already resolved');
-    }
-
-    report.status = ReportStatus.RESOLVED;
-    report.resolvedBy = adminId;
-    report.resolvedAt = new Date();
-    report.resolutionNotes = resolutionNotes;
-    report.templateId = templateId ?? null;
-
-    const saved = await this.reportRepository.save(report);
-
     const templateUsed = templateId
       ? await this.moderationTemplateService
           .findById(templateId)
           .catch(() => null)
       : null;
 
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.REPORT_RESOLVED,
-      'report',
-      id,
-      {
-        reportType: report.type,
-        confessionId: report.confessionId,
-        templateId,
-        templateName: templateUsed?.name ?? null,
-      },
-      resolutionNotes,
-      request,
-    );
+    const saved = await this.runInModerationTransaction(async (manager) => {
+      const reportRepo = manager.getRepository(Report);
+      const report = await reportRepo.findOne({ where: { id } });
+
+      if (!report) {
+        throw new NotFoundException('Report not found');
+      }
+
+      if (report.status === ReportStatus.RESOLVED) {
+        throw new BadRequestException('Report already resolved');
+      }
+
+      report.status = ReportStatus.RESOLVED;
+      report.resolvedBy = adminId;
+      report.resolvedAt = new Date();
+      report.resolutionNotes = resolutionNotes;
+      report.templateId = templateId ?? null;
+
+      const updated = await reportRepo.save(report);
+
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.REPORT_RESOLVED,
+        'report',
+        id,
+        {
+          reportType: report.type,
+          confessionId: report.confessionId,
+          templateId,
+          templateName: templateUsed?.name ?? null,
+        },
+        resolutionNotes,
+        request,
+        manager,
+      );
+
+      return updated;
+    });
 
     this.eventEmitter.emit('report.updated', saved);
 
@@ -171,28 +204,38 @@ export class AdminService {
     notes: string | null,
     request?: Request,
   ): Promise<Report> {
-    const report = await this.getReportById(id);
+    const saved = await this.runInModerationTransaction(async (manager) => {
+      const reportRepo = manager.getRepository(Report);
+      const report = await reportRepo.findOne({ where: { id } });
 
-    if (report.status === ReportStatus.DISMISSED) {
-      throw new BadRequestException('Report already dismissed');
-    }
+      if (!report) {
+        throw new NotFoundException('Report not found');
+      }
 
-    report.status = ReportStatus.DISMISSED;
-    report.resolvedBy = adminId;
-    report.resolvedAt = new Date();
-    report.resolutionNotes = notes;
+      if (report.status === ReportStatus.DISMISSED) {
+        throw new BadRequestException('Report already dismissed');
+      }
 
-    const saved = await this.reportRepository.save(report);
+      report.status = ReportStatus.DISMISSED;
+      report.resolvedBy = adminId;
+      report.resolvedAt = new Date();
+      report.resolutionNotes = notes;
 
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.REPORT_DISMISSED,
-      'report',
-      id,
-      { reportType: report.type },
-      notes,
-      request,
-    );
+      const updated = await reportRepo.save(report);
+
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.REPORT_DISMISSED,
+        'report',
+        id,
+        { reportType: report.type },
+        notes,
+        request,
+        manager,
+      );
+
+      return updated;
+    });
 
     this.eventEmitter.emit('report.updated', saved);
 
@@ -204,38 +247,88 @@ export class AdminService {
     adminId: number,
     notes: string | null,
     request?: Request,
-  ): Promise<number> {
-    const reports = await this.reportRepository.find({
-      where: { id: In(ids), status: ReportStatus.PENDING },
+  ): Promise<BulkResolveResult> {
+    const result = await this.runInModerationTransaction(async (manager) => {
+      const reportRepo = manager.getRepository(Report);
+
+      // Fetch all requested reports in one query (any status)
+      const found = await reportRepo.find({
+        where: { id: In(ids) },
+      });
+
+      const foundById = new Map(found.map((r) => [r.id, r]));
+
+      const outcomes: BulkResolveOutcome[] = [];
+      const toSave: Report[] = [];
+      const now = new Date();
+
+      for (const id of ids) {
+        const report = foundById.get(id);
+
+        if (!report) {
+          outcomes.push({ id, outcome: 'not_found' });
+          continue;
+        }
+
+        if (report.status !== ReportStatus.PENDING) {
+          outcomes.push({
+            id,
+            outcome: 'skipped',
+            previousStatus: report.status,
+          });
+          continue;
+        }
+
+        const before = report.status;
+        report.status = ReportStatus.RESOLVED;
+        report.resolvedBy = adminId;
+        report.resolvedAt = now;
+        report.resolutionNotes = notes;
+        toSave.push(report);
+        outcomes.push({ id, outcome: 'resolved', previousStatus: before });
+      }
+
+      if (toSave.length > 0) {
+        await reportRepo.save(toSave);
+      }
+
+      // Write one audit entry per touched report so every ID is individually
+      // attributable in the audit trail.
+      for (const item of outcomes) {
+        await this.moderationService.logAction(
+          adminId,
+          AuditActionType.BULK_ACTION,
+          'report',
+          item.id,
+          {
+            action: 'bulk_resolve',
+            outcome: item.outcome,
+            previousStatus: item.previousStatus ?? null,
+            resolvedAt: item.outcome === 'resolved' ? now.toISOString() : null,
+          },
+          notes,
+          request,
+          manager,
+        );
+      }
+
+      return {
+        toPublish: toSave,
+        summary: {
+          requested: ids.length,
+          resolved: outcomes.filter((o) => o.outcome === 'resolved').length,
+          skipped: outcomes.filter((o) => o.outcome === 'skipped').length,
+          notFound: outcomes.filter((o) => o.outcome === 'not_found').length,
+          outcomes,
+        },
+      };
     });
 
-    if (reports.length === 0) {
-      return 0;
+    if (result.toPublish.length > 0) {
+      this.eventEmitter.emit('reports.bulk.updated', result.toPublish);
     }
 
-    const now = new Date();
-    reports.forEach((report) => {
-      report.status = ReportStatus.RESOLVED;
-      report.resolvedBy = adminId;
-      report.resolvedAt = now;
-      report.resolutionNotes = notes;
-    });
-
-    await this.reportRepository.save(reports);
-
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.BULK_ACTION,
-      'report',
-      null,
-      { action: 'bulk_resolve', count: reports.length, reportIds: ids },
-      notes,
-      request,
-    );
-
-    this.eventEmitter.emit('reports.bulk.updated', reports);
-
-    return reports.length;
+    return result.summary;
   }
 
   // Confessions
@@ -245,26 +338,30 @@ export class AdminService {
     reason: string | null,
     request?: Request,
   ): Promise<void> {
-    const confession = await this.confessionRepository.findOne({
-      where: { id },
+    await this.runInModerationTransaction(async (manager) => {
+      const confessionRepo = manager.getRepository(AnonymousConfession);
+      const confession = await confessionRepo.findOne({
+        where: { id },
+      });
+
+      if (!confession) {
+        throw new NotFoundException('Confession not found');
+      }
+
+      confession.isDeleted = true;
+      await confessionRepo.save(confession);
+
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.CONFESSION_DELETED,
+        'confession',
+        id,
+        { reason },
+        reason,
+        request,
+        manager,
+      );
     });
-
-    if (!confession) {
-      throw new NotFoundException('Confession not found');
-    }
-
-    confession.isDeleted = true;
-    await this.confessionRepository.save(confession);
-
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.CONFESSION_DELETED,
-      'confession',
-      id,
-      { reason },
-      reason,
-      request,
-    );
   }
 
   async hideConfession(
@@ -273,28 +370,32 @@ export class AdminService {
     reason: string | null,
     request?: Request,
   ): Promise<AnonymousConfession> {
-    const confession = await this.confessionRepository.findOne({
-      where: { id },
+    return this.runInModerationTransaction(async (manager) => {
+      const confessionRepo = manager.getRepository(AnonymousConfession);
+      const confession = await confessionRepo.findOne({
+        where: { id },
+      });
+
+      if (!confession) {
+        throw new NotFoundException('Confession not found');
+      }
+
+      confession.isHidden = true;
+      const saved = await confessionRepo.save(confession);
+
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.CONFESSION_HIDDEN,
+        'confession',
+        id,
+        { reason },
+        reason,
+        request,
+        manager,
+      );
+
+      return saved;
     });
-
-    if (!confession) {
-      throw new NotFoundException('Confession not found');
-    }
-
-    confession.isHidden = true;
-    const saved = await this.confessionRepository.save(confession);
-
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.CONFESSION_HIDDEN,
-      'confession',
-      id,
-      { reason },
-      reason,
-      request,
-    );
-
-    return saved;
   }
 
   async unhideConfession(
@@ -302,28 +403,32 @@ export class AdminService {
     adminId: number,
     request?: Request,
   ): Promise<AnonymousConfession> {
-    const confession = await this.confessionRepository.findOne({
-      where: { id },
+    return this.runInModerationTransaction(async (manager) => {
+      const confessionRepo = manager.getRepository(AnonymousConfession);
+      const confession = await confessionRepo.findOne({
+        where: { id },
+      });
+
+      if (!confession) {
+        throw new NotFoundException('Confession not found');
+      }
+
+      confession.isHidden = false;
+      const saved = await confessionRepo.save(confession);
+
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.CONFESSION_UNHIDDEN,
+        'confession',
+        id,
+        null,
+        null,
+        request,
+        manager,
+      );
+
+      return saved;
     });
-
-    if (!confession) {
-      throw new NotFoundException('Confession not found');
-    }
-
-    confession.isHidden = false;
-    const saved = await this.confessionRepository.save(confession);
-
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.CONFESSION_UNHIDDEN,
-      'confession',
-      id,
-      null,
-      null,
-      request,
-    );
-
-    return saved;
   }
 
   // Users
@@ -333,30 +438,34 @@ export class AdminService {
     reason: string | null,
     request?: Request,
   ): Promise<User> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    return this.runInModerationTransaction(async (manager) => {
+      const userRepo = manager.getRepository(User);
+      const user = await userRepo.findOne({ where: { id: userId } });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
 
-    if (!user.is_active) {
-      throw new BadRequestException('User is already banned');
-    }
+      if (!user.is_active) {
+        throw new BadRequestException('User is already banned');
+      }
 
-    user.is_active = false;
-    const saved = await this.userRepository.save(user);
+      user.is_active = false;
+      const saved = await userRepo.save(user);
 
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.USER_BANNED,
-      'user',
-      userId.toString(),
-      { reason },
-      reason,
-      request,
-    );
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.USER_BANNED,
+        'user',
+        userId.toString(),
+        { reason },
+        reason,
+        request,
+        manager,
+      );
 
-    return saved;
+      return saved;
+    });
   }
 
   async unbanUser(
@@ -364,30 +473,34 @@ export class AdminService {
     adminId: number,
     request?: Request,
   ): Promise<User> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    return this.runInModerationTransaction(async (manager) => {
+      const userRepo = manager.getRepository(User);
+      const user = await userRepo.findOne({ where: { id: userId } });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
 
-    if (user.is_active) {
-      throw new BadRequestException('User is not banned');
-    }
+      if (user.is_active) {
+        throw new BadRequestException('User is not banned');
+      }
 
-    user.is_active = true;
-    const saved = await this.userRepository.save(user);
+      user.is_active = true;
+      const saved = await userRepo.save(user);
 
-    await this.moderationService.logAction(
-      adminId,
-      AuditActionType.USER_UNBANNED,
-      'user',
-      userId.toString(),
-      null,
-      null,
-      request,
-    );
+      await this.moderationService.logAction(
+        adminId,
+        AuditActionType.USER_UNBANNED,
+        'user',
+        userId.toString(),
+        null,
+        null,
+        request,
+        manager,
+      );
 
-    return saved;
+      return saved;
+    });
   }
 
   async searchUsers(
@@ -472,6 +585,104 @@ export class AdminService {
       note: anonIds.length
         ? 'Confessions derived from user session mappings (user_anonymous_users)'
         : 'No anonymous session mappings found for this user yet',
+    };
+  }
+
+  // Operator anchor & tip lookup (Issue #778)
+  async lookupAnchorAndTip(params: {
+    txHash?: string;
+    confessionId?: string;
+  }): Promise<{
+    anchor: {
+      confessionId: string | null;
+      stellarTxHash: string | null;
+      stellarHash: string | null;
+      isAnchored: boolean;
+      anchoredAt: Date | null;
+    } | null;
+    tips: {
+      id: string;
+      txId: string;
+      amount: number;
+      senderAddress: string | null;
+      verificationStatus: string;
+      verifiedAt: Date | null;
+      createdAt: Date;
+    }[];
+  }> {
+    const { txHash, confessionId } = params;
+
+    if (!txHash && !confessionId) {
+      throw new BadRequestException(
+        'At least one of txHash or confessionId is required',
+      );
+    }
+
+    let confession: AnonymousConfession | null = null;
+    let tips: Tip[] = [];
+
+    if (txHash) {
+      // Look up confession by stellar tx hash
+      confession = await this.confessionRepository.findOne({
+        where: { stellarTxHash: txHash },
+        select: [
+          'id',
+          'stellarTxHash',
+          'stellarHash',
+          'isAnchored',
+          'anchoredAt',
+        ] as any,
+      });
+
+      // Also look for a tip by tx ID
+      const tip = await this.tipRepository.findOne({
+        where: { txId: txHash },
+      });
+      if (tip) tips = [tip];
+    }
+
+    if (confessionId) {
+      if (!confession) {
+        confession = await this.confessionRepository.findOne({
+          where: { id: confessionId },
+          select: [
+            'id',
+            'stellarTxHash',
+            'stellarHash',
+            'isAnchored',
+            'anchoredAt',
+          ] as any,
+        });
+      }
+
+      // Fetch all tips for this confession
+      if (tips.length === 0) {
+        tips = await this.tipRepository.find({
+          where: { confessionId },
+          order: { createdAt: 'DESC' },
+        });
+      }
+    }
+
+    return {
+      anchor: confession
+        ? {
+            confessionId: confession.id,
+            stellarTxHash: confession.stellarTxHash ?? null,
+            stellarHash: confession.stellarHash ?? null,
+            isAnchored: confession.isAnchored ?? false,
+            anchoredAt: confession.anchoredAt ?? null,
+          }
+        : null,
+      tips: tips.map((t) => ({
+        id: t.id,
+        txId: t.txId,
+        amount: Number(t.amount),
+        senderAddress: t.senderAddress,
+        verificationStatus: t.verificationStatus,
+        verifiedAt: t.verifiedAt,
+        createdAt: t.createdAt,
+      })),
     };
   }
 

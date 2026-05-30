@@ -8,7 +8,7 @@ import { ThemeToggle } from "../common/ThemeToggle";
 import Sidebar from "./Sidebar";
 
 const navLinkClass =
-  "text-gray-700 hover:text-purple-600 dark:text-slate-300 dark:hover:text-purple-400 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500 rounded";
+  "rounded-full px-4 py-2.5 text-sm font-medium text-[var(--secondary)] transition-all duration-200 hover:bg-white/60 hover:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]";
 
 export default function Header() {
   const { user, logout } = useAuth();
@@ -33,24 +33,27 @@ export default function Header() {
     <>
       <header
         aria-label="Main navigation"
-        className="border-b bg-white dark:bg-zinc-950 sticky top-0 z-30"
+        className="sticky top-0 z-30 border-b border-[var(--border)] bg-[color:rgba(243,239,232,0.78)] backdrop-blur-xl"
         onKeyDown={handleNavKeyDown}
       >
-        <nav className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+        <nav className="mx-auto max-w-6xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between gap-6">
             <Link
               href="/"
-              className="text-xl font-bold text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500 rounded"
+              className="rounded-full px-1 text-[2rem] font-semibold tracking-tight text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]"
             >
-              xConfess
+              <span className="font-editorial">XConfess</span>
             </Link>
 
-            <div className="hidden md:flex items-center space-x-8">
+            <div className="hidden items-center space-x-2 md:flex">
               <Link href="/" className={navLinkClass}>
                 Feed
               </Link>
               <Link href="/search" className={navLinkClass}>
                 Search
+              </Link>
+              <Link href="/compare" className={navLinkClass}>
+                Compare
               </Link>
               <Link href="/profile" className={navLinkClass}>
                 Profile
@@ -64,18 +67,24 @@ export default function Header() {
                 Messages
               </Link>
 
-              <div aria-hidden="true" className="h-6 w-px bg-zinc-200 dark:bg-slate-800" />
+              <div
+                aria-hidden="true"
+                className="mx-2 h-8 w-px bg-[var(--border)]"
+              />
 
               <ThemeToggle />
 
               {user && (
                 <div className="flex items-center space-x-4">
-                  <span aria-label={`Logged in as ${user.username}`} className="text-sm text-gray-600 dark:text-slate-400">
+                  <span
+                    aria-label={`Logged in as ${user.username}`}
+                    className="rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm text-[var(--secondary)]"
+                  >
                     @{user.username}
                   </span>
                   <button
                     onClick={logout}
-                    className="flex items-center space-x-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 rounded"
+                    className="flex items-center space-x-1 rounded-full px-3 py-2 text-red-700 transition-colors hover:bg-red-50 hover:text-red-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
                   >
                     <LogOut aria-hidden="true" size={18} />
                     <span>Logout</span>
@@ -89,7 +98,7 @@ export default function Header() {
               <button
                 ref={menuButtonRef}
                 type="button"
-                className="p-2 -mr-2 text-gray-700 dark:text-slate-300 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500 rounded"
+                className="-mr-2 rounded-full border border-[var(--border)] bg-[var(--surface-muted)] p-4 text-[var(--secondary)] transition-colors hover:bg-[var(--surface-strong)] hover:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)] min-h-[44px] min-w-[44px]"
                 aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-navigation"

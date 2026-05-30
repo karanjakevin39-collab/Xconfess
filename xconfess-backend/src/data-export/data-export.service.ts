@@ -11,8 +11,8 @@ import * as crypto from 'crypto';
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
-import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { ExportRequest } from './entities/export-request.entity';
 import { ExportChunk } from './entities/export-chunk.entity';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -162,19 +162,30 @@ export class DataExportService {
     });
   }
 
-  generateSignedDownloadUrl(
+  async generateSignedDownloadUrl(
     requestId: string,
     userId: string,
     chunkIndex?: number,
-  ): string {
-    const expires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours from now
+  ): Promise<string> {
+    const ttlMs = this.configService.get<number>(
+      'app.exportDownloadTtlMs',
+      24 * 60 * 60 * 1000,
+    );
+    const expires = Date.now() + ttlMs;
     const secret = this.configService.get<string>('app.appSecret', '');
 
-    // Create a hash of the payload
+    // For single-file downloads generate and persist a one-time nonce so the
+    // link cannot be replayed after the first successful download.
+    let token: string | undefined;
+    if (chunkIndex === undefined) {
+      token = crypto.randomBytes(16).toString('hex');
+      await this.exportRepository.update(requestId, { downloadToken: token });
+    }
+
     const dataToSign =
       chunkIndex !== undefined
         ? `${requestId}:${userId}:${chunkIndex}:${expires}`
-        : `${requestId}:${userId}:${expires}`;
+        : `${requestId}:${userId}:${expires}:${token}`;
 
     const signature = crypto
       .createHmac('sha256', secret || 'APP_SECRET_NOT_SET')
@@ -197,7 +208,86 @@ export class DataExportService {
       .catch(() => undefined);
 
     const chunkParam = chunkIndex !== undefined ? `&chunk=${chunkIndex}` : '';
-    return `${baseUrl}/api/data-export/download/${requestId}?userId=${userId}&expires=${expires}&signature=${signature}${chunkParam}`;
+    const tokenParam = token !== undefined ? `&token=${token}` : '';
+    return `${baseUrl}/api/data-export/download/${requestId}?userId=${userId}&expires=${expires}&signature=${signature}${chunkParam}${tokenParam}`;
+  }
+
+  /**
+   * Invalidates the current download token after a successful download.
+   * Subsequent requests with the same token will be rejected.
+   */
+  async invalidateDownloadToken(requestId: string): Promise<void> {
+    await this.exportRepository.update(requestId, {
+      downloadToken: null,
+      downloadedAt: new Date(),
+    });
+  }
+
+  /**
+   * Validates that the supplied token matches the stored one-time nonce and,
+   * if so, atomically consumes it to prevent replay.
+   *
+   * Issue #789 — token expiry rules:
+   *   1. Token must match the stored nonce (null = already consumed or never issued).
+   *   2. Token must not have been used before (`downloadedAt` must be null).
+   *   3. The export must still be within its retention window (24 h after `createdAt`).
+   *
+   * Returns false when any condition fails; callers should treat false as 403/410.
+   */
+  async validateAndConsumeToken(
+    requestId: string,
+    userId: string,
+    token: string,
+  ): Promise<boolean> {
+    const record = await this.exportRepository.findOne({
+      where: { id: requestId, userId },
+      select: ['downloadToken', 'downloadedAt', 'createdAt', 'status'] as any,
+    });
+
+    // Token missing, already consumed, or mismatch.
+    if (!record || record.downloadToken !== token) return false;
+
+    // Terminal-use guard: token was already used (downloadedAt is set).
+    if (record.downloadedAt !== null) return false;
+
+    // Retention-window guard: export has exceeded its TTL.
+    if (!this.isFileAvailable(record as Pick<ExportRequest, 'status' | 'createdAt'>)) {
+      // Mark the token as expired so cleanup jobs can tell it apart from unused tokens.
+      await this.exportRepository.update(requestId, {
+        downloadToken: null,
+        expiredAt: new Date(),
+      });
+      return false;
+    }
+
+    await this.invalidateDownloadToken(requestId);
+    return true;
+  }
+
+  /**
+   * Expire all download tokens whose retention window has elapsed without being
+   * consumed.  Called by the cleanup scheduler (data-export-cleanup.ts).
+   *
+   * Issue #789 — ensures tokens cannot be reused after the configured TTL even
+   * if the owner never triggered a download.
+   */
+  async expireStaleDownloadTokens(): Promise<number> {
+    const ttlMs = this.configService.get<number>(
+      'DATA_EXPORT_TTL_MS',
+      24 * 60 * 60 * 1000,
+    );
+    const cutoff = new Date(Date.now() - ttlMs);
+
+    const result = await this.exportRepository
+      .createQueryBuilder()
+      .update(ExportRequest)
+      .set({ downloadToken: null, expiredAt: () => 'NOW()' })
+      .where('downloadToken IS NOT NULL')
+      .andWhere('downloadedAt IS NULL')
+      .andWhere('createdAt < :cutoff', { cutoff })
+      .execute();
+
+    return result.affected ?? 0;
   }
 
   async getExportFile(requestId: string, userId: string) {
@@ -273,17 +363,26 @@ export class DataExportService {
   }
 
   private getExpiryTimestamp(createdAt: Date): number {
-    return new Date(createdAt).getTime() + 24 * 60 * 60 * 1000;
+    const ttlMs = this.configService.get<number>(
+      'app.exportDownloadTtlMs',
+      24 * 60 * 60 * 1000,
+    );
+    return new Date(createdAt).getTime() + ttlMs;
   }
 
-  private isDownloadStillValid(
+  /** True when the underlying export file is still within its TTL window. */
+  private isFileAvailable(
     request: Pick<ExportRequest, 'status' | 'createdAt'>,
   ): boolean {
-    if (request.status !== 'READY') {
-      return false;
-    }
-
+    if (request.status !== 'READY') return false;
     return Date.now() <= this.getExpiryTimestamp(request.createdAt);
+  }
+
+  /** True when a valid one-time token exists and the file is still available. */
+  private hasActiveToken(
+    request: Pick<ExportRequest, 'status' | 'createdAt' | 'downloadToken'>,
+  ): boolean {
+    return this.isFileAvailable(request) && request.downloadToken !== null;
   }
 
   private buildProgress(request: Partial<ExportRequest>): ExportProgress {
@@ -298,7 +397,7 @@ export class DataExportService {
     };
   }
 
-  private toHistoryItem(
+  private async toHistoryItem(
     request: Pick<
       ExportRequest,
       | 'id'
@@ -312,15 +411,17 @@ export class DataExportService {
       | 'expiredAt'
       | 'retryCount'
       | 'lastFailureReason'
+      | 'downloadToken'
     >,
-  ): ExportHistoryItem {
+  ): Promise<ExportHistoryItem> {
     const expiresAt =
       request.status === 'READY'
         ? this.getExpiryTimestamp(request.createdAt)
         : null;
-    const canRedownload = this.isDownloadStillValid(request);
+    const fileAvailable = this.isFileAvailable(request);
+    const canRedownload = this.hasActiveToken(request);
     const normalizedStatus: ExportHistoryStatus =
-      request.status === 'READY' && !canRedownload
+      request.status === 'READY' && !fileAvailable
         ? 'EXPIRED'
         : (request.status as ExportHistoryStatus);
 
@@ -330,9 +431,10 @@ export class DataExportService {
       createdAt: request.createdAt,
       expiresAt,
       canRedownload,
-      canRequestNewLink: normalizedStatus === 'EXPIRED',
+      // Allow regeneration when the file is still available but the token was consumed.
+      canRequestNewLink: fileAvailable && !canRedownload,
       downloadUrl: canRedownload
-        ? this.generateSignedDownloadUrl(request.id, request.userId)
+        ? await this.generateSignedDownloadUrl(request.id, request.userId)
         : null,
       progress: this.buildProgress(request),
     };
@@ -351,6 +453,7 @@ export class DataExportService {
     'expiredAt',
     'retryCount',
     'lastFailureReason',
+    'downloadToken',
   ] as const;
 
   async getExportHistory(
@@ -364,7 +467,7 @@ export class DataExportService {
       select: this.lifecycleSelect as any,
     });
 
-    return requests.map((request) => this.toHistoryItem(request));
+    return Promise.all(requests.map((request) => this.toHistoryItem(request)));
   }
 
   async getLatestExport(userId: string): Promise<ExportHistoryItem | null> {
@@ -386,14 +489,17 @@ export class DataExportService {
       select: this.lifecycleSelect as any,
     });
 
-    if (!request || !this.isDownloadStillValid(request)) {
+    if (!request || !this.isFileAvailable(request)) {
       throw new BadRequestException(
         'Secure download link is no longer available. Request a new export.',
       );
     }
 
     return {
-      downloadUrl: this.generateSignedDownloadUrl(request.id, request.userId),
+      downloadUrl: await this.generateSignedDownloadUrl(
+        request.id,
+        request.userId,
+      ),
     };
   }
 
@@ -414,7 +520,7 @@ export class DataExportService {
       throw new NotFoundException('Export request not found or unauthorized');
     }
 
-    const canRedownload = this.isDownloadStillValid(request);
+    const canRedownload = this.isFileAvailable(request);
     const normalizedStatus: ExportHistoryStatus =
       request.status === 'READY' && !canRedownload
         ? 'EXPIRED'
@@ -429,11 +535,204 @@ export class DataExportService {
   }
 
   async compileUserData(userId: string): Promise<any> {
+    // Issue #428: Implement export redaction for deleted/deactivated users
+    const userRepo = this.exportRepository.manager.getRepository('User');
+    const confessionRepo = this.exportRepository.manager.getRepository('AnonymousConfession');
+    const commentRepo = this.exportRepository.manager.getRepository('Comment');
+    const messageRepo = this.exportRepository.manager.getRepository('Message');
+
+    // Get user to check if active
+    const user = await userRepo.findOne({ where: { id: userId } });
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Fetch confessions with soft-delete awareness
+    const confessions = await confessionRepo
+      .createQueryBuilder('confession')
+      .leftJoinAndSelect('confession.anonymousUser', 'anonymousUser')
+      .leftJoinAndSelect('anonymousUser.userLinks', 'userLinks')
+      .where('userLinks.userId = :userId', { userId })
+      .getMany();
+
+    // Fetch comments with soft-delete awareness
+    const comments = await commentRepo
+      .createQueryBuilder('comment')
+      .leftJoinAndSelect('comment.anonymousUser', 'anonymousUser')
+      .leftJoinAndSelect('anonymousUser.userLinks', 'userLinks')
+      .where('userLinks.userId = :userId', { userId })
+      .getMany();
+
+    // Fetch messages
+    const messages = await messageRepo
+      .createQueryBuilder('message')
+      .leftJoinAndSelect('message.sender', 'sender')
+      .leftJoinAndSelect('sender.userLinks', 'userLinks')
+      .where('userLinks.userId = :userId', { userId })
+      .getMany();
+
+    // Apply redaction policy
+    const redactedConfessions = confessions.map((confession) =>
+      this.redactConfessionForExport(confession, user),
+    );
+
+    const redactedComments = comments.map((comment) =>
+      this.redactCommentForExport(comment, user),
+    );
+
+    const redactedMessages = messages.map((message) =>
+      this.redactMessageForExport(message, user),
+    );
+
     return {
       userId,
-      confessions: [],
-      messages: [],
+      exportedAt: new Date().toISOString(),
+      userStatus: user.is_active ? 'active' : 'deactivated',
+      confessions: redactedConfessions,
+      comments: redactedComments,
+      messages: redactedMessages,
       reactions: [],
+      _redactionPolicy: {
+        description: 'Content redacted according to deletion and moderation policies',
+        deletedContentMasked: true,
+        moderatedContentMasked: true,
+        deactivatedUserContentMasked: !user.is_active,
+      },
+    };
+  }
+
+  /**
+   * Issue #428: Redact confession content based on deletion and moderation status
+   */
+  private redactConfessionForExport(confession: any, user: any): any {
+    const isDeleted = confession.isDeleted || confession.deletedAt;
+    const isModerated = confession.isHidden || confession.moderationStatus === 'rejected';
+    const isUserDeactivated = !user.is_active;
+
+    if (isDeleted) {
+      return {
+        id: confession.id,
+        message: '[REDACTED: Content was deleted]',
+        _redacted: true,
+        _reason: 'deleted',
+        deletedAt: confession.deletedAt,
+        created_at: confession.created_at,
+        metadata: {
+          wasAnchored: confession.isAnchored,
+          hadReactions: true,
+        },
+      };
+    }
+
+    if (isModerated) {
+      return {
+        id: confession.id,
+        message: '[REDACTED: Content was removed by moderation]',
+        _redacted: true,
+        _reason: 'moderated',
+        moderationStatus: confession.moderationStatus,
+        created_at: confession.created_at,
+        metadata: {
+          moderationScore: confession.moderationScore,
+          moderationFlags: confession.moderationFlags,
+        },
+      };
+    }
+
+    if (isUserDeactivated) {
+      return {
+        id: confession.id,
+        message: '[REDACTED: User account deactivated]',
+        _redacted: true,
+        _reason: 'user_deactivated',
+        created_at: confession.created_at,
+        metadata: {
+          originalLength: confession.message?.length || 0,
+        },
+      };
+    }
+
+    // Return full content for active, non-deleted, non-moderated confessions
+    return {
+      id: confession.id,
+      message: confession.message,
+      gender: confession.gender,
+      created_at: confession.created_at,
+      view_count: confession.view_count,
+      isAnchored: confession.isAnchored,
+      stellarTxHash: confession.stellarTxHash,
+      _redacted: false,
+    };
+  }
+
+  /**
+   * Issue #428: Redact comment content based on deletion status
+   */
+  private redactCommentForExport(comment: any, user: any): any {
+    const isDeleted = comment.isDeleted;
+    const isUserDeactivated = !user.is_active;
+
+    if (isDeleted) {
+      return {
+        id: comment.id,
+        content: '[REDACTED: Comment was deleted]',
+        _redacted: true,
+        _reason: 'deleted',
+        createdAt: comment.createdAt,
+        confessionId: comment.confession?.id,
+      };
+    }
+
+    if (isUserDeactivated) {
+      return {
+        id: comment.id,
+        content: '[REDACTED: User account deactivated]',
+        _redacted: true,
+        _reason: 'user_deactivated',
+        createdAt: comment.createdAt,
+        confessionId: comment.confession?.id,
+      };
+    }
+
+    return {
+      id: comment.id,
+      content: comment.content,
+      createdAt: comment.createdAt,
+      confessionId: comment.confession?.id,
+      parentId: comment.parentId,
+      _redacted: false,
+    };
+  }
+
+  /**
+   * Issue #428: Redact message content for deactivated users
+   */
+  private redactMessageForExport(message: any, user: any): any {
+    const isUserDeactivated = !user.is_active;
+
+    if (isUserDeactivated) {
+      return {
+        id: message.id,
+        content: '[REDACTED: User account deactivated]',
+        replyContent: message.replyContent
+          ? '[REDACTED: User account deactivated]'
+          : null,
+        _redacted: true,
+        _reason: 'user_deactivated',
+        createdAt: message.createdAt,
+        confessionId: message.confession?.id,
+      };
+    }
+
+    return {
+      id: message.id,
+      content: message.content,
+      replyContent: message.replyContent,
+      createdAt: message.createdAt,
+      repliedAt: message.repliedAt,
+      confessionId: message.confession?.id,
+      _redacted: false,
     };
   }
 

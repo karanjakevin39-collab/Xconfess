@@ -1,8 +1,8 @@
-// ...existing code...
 import { DataSource, Repository, FindOptionsWhere, ILike } from 'typeorm';
 import { Injectable } from '@nestjs/common';
 import { AnonymousConfession } from '../entities/confession.entity';
 import { SearchConfessionDto } from '../dto/search-confession.dto';
+import { decodeCursor, encodeCursor } from '../../common/pagination';
 
 /**
  * Repository for handling database operations related to anonymous confessions.
@@ -313,8 +313,7 @@ export class AnonymousConfessionRepository extends Repository<AnonymousConfessio
       now.getUTCMonth(),
       now.getUTCDate(),
     );
-    const resolvedStartAt =
-      startAt ?? new Date(todayUTC - 24 * 60 * 60 * 1000);
+    const resolvedStartAt = startAt ?? new Date(todayUTC - 24 * 60 * 60 * 1000);
     const resolvedEndAt = endAt ?? new Date(todayUTC + 24 * 60 * 60 * 1000);
 
     return this.createQueryBuilder('confession')
@@ -329,7 +328,9 @@ export class AnonymousConfessionRepository extends Repository<AnonymousConfessio
         'trending_score',
       )
       .where('confession.created_at IS NOT NULL')
-      .andWhere('confession.created_at >= :startAt', { startAt: resolvedStartAt })
+      .andWhere('confession.created_at >= :startAt', {
+        startAt: resolvedStartAt,
+      })
       .andWhere('confession.created_at < :endAt', { endAt: resolvedEndAt })
       .andWhere('confession.isDeleted = false')
       .andWhere(
@@ -355,12 +356,17 @@ export class AnonymousConfessionRepository extends Repository<AnonymousConfessio
     tagName: string,
     page: number = 1,
     limit: number = 10,
+    cursor?: string,
   ): Promise<{
     confessions: AnonymousConfession[];
     total: number;
+    nextCursor?: string;
+    hasMore: boolean;
   }> {
     const safeLimit = typeof limit === 'number' ? limit : 10;
-    const offset = (page - 1) * safeLimit;
+    const parsedCursor = decodeCursor<{ id: string; created_at: string }>(
+      cursor,
+    );
 
     const queryBuilder = this.createQueryBuilder('confession')
       .innerJoin('confession.confessionTags', 'confessionTag')
@@ -390,10 +396,22 @@ export class AnonymousConfessionRepository extends Repository<AnonymousConfessio
         'reactions.emoji',
         'reactions.created_at',
         'reactionUser.id',
-      ])
+      ]);
+
+    if (parsedCursor) {
+      queryBuilder.andWhere(
+        '(confession.created_at < :createdAt OR (confession.created_at = :createdAt AND confession.id < :id))',
+        { createdAt: parsedCursor.created_at, id: parsedCursor.id },
+      );
+    } else if (page > 1) {
+      const offset = (page - 1) * safeLimit;
+      queryBuilder.skip(offset);
+    }
+
+    queryBuilder
       .orderBy('confession.created_at', 'DESC')
-      .skip(offset)
-      .take(safeLimit);
+      .addOrderBy('confession.id', 'DESC')
+      .take(safeLimit + 1);
 
     const totalQuery = this.createQueryBuilder('confession')
       .innerJoin('confession.confessionTags', 'confessionTag')
@@ -411,11 +429,23 @@ export class AnonymousConfessionRepository extends Repository<AnonymousConfessio
         "(anonymousUser.userLinks IS NULL OR anonymousUser.userLinks = '{}' OR user.privacy_settings IS NULL OR user.privacy_settings->>'isDiscoverable' = 'true' OR JSON_TYPE(user.privacy_settings, '$.isDiscoverable') IS NULL)",
       );
 
-    const [confessions, total] = await Promise.all([
+    const [items, total] = await Promise.all([
       queryBuilder.getMany(),
       totalQuery.getCount(),
     ]);
 
-    return { confessions, total };
+    const hasMore = items.length > safeLimit;
+    const confessions = hasMore ? items.slice(0, safeLimit) : items;
+
+    let nextCursor: string | undefined;
+    if (hasMore && confessions.length > 0) {
+      const lastItem = confessions[confessions.length - 1];
+      nextCursor = encodeCursor({
+        id: lastItem.id,
+        created_at: lastItem.created_at.toISOString(),
+      });
+    }
+
+    return { confessions, total, nextCursor, hasMore };
   }
 }

@@ -20,6 +20,11 @@ import { StellarInvokeContractGuard } from './guards/stellar-invoke-contract.gua
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditActionType } from '../audit-log/audit-log.entity';
 import { AuthenticatedRequest } from '../auth/interfaces/jwt-payload.interface';
+import { getStellarInvocationPolicy } from './stellar-invocation-policy';
+import {
+  buildAuditContextFromRequest,
+  buildStellarInvocationAuditMetadata,
+} from './stellar-invocation-audit';
 
 @ApiTags('Stellar')
 @Controller('stellar')
@@ -78,8 +83,18 @@ export class StellarController {
     }
 
     const signerPk = StellarSDK.Keypair.fromSecret(signerSecret).publicKey();
+    const invocation = this.contractService.invocationFromAllowlistedDto(
+      dto,
+      signerPk,
+    );
+    const policy = getStellarInvocationPolicy(dto.operation);
+
     if (dto.sourceAccount !== signerPk) {
       await this.auditStellarInvocation(req, dto, {
+        allowlistClass: policy?.allowlistClass,
+        contractId: invocation.contractId,
+        functionName: invocation.functionName,
+        sourceAccount: dto.sourceAccount,
         outcome: 'denied',
         denialReason: 'source_account_mismatch',
         expectedSourceAccount: signerPk,
@@ -89,31 +104,32 @@ export class StellarController {
       );
     }
 
-    const invocation = this.contractService.invocationFromAllowlistedDto(
-      dto,
-      signerPk,
-    );
-
     try {
       const result = await this.contractService.invokeContract(
         invocation,
         signerSecret,
       );
       await this.auditStellarInvocation(req, dto, {
+        allowlistClass: policy?.allowlistClass,
         outcome: result.success ? 'success' : 'failed',
         transactionHash: result.hash,
         chainSuccess: result.success,
         contractId: invocation.contractId,
         functionName: invocation.functionName,
+        sourceAccount: dto.sourceAccount,
+        authorizedScope: (req as any).stellarInvocationScopeMatch,
       });
       return result;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       await this.auditStellarInvocation(req, dto, {
+        allowlistClass: policy?.allowlistClass,
         outcome: 'failed',
         contractId: invocation.contractId,
         functionName: invocation.functionName,
-        errorMessage: message.slice(0, 500),
+        sourceAccount: dto.sourceAccount,
+        errorMessage: message,
+        authorizedScope: (req as any).stellarInvocationScopeMatch,
       });
       throw err;
     }
@@ -122,23 +138,23 @@ export class StellarController {
   private async auditStellarInvocation(
     req: AuthenticatedRequest,
     dto: InvokeContractDto,
-    fields: Record<string, unknown>,
+    fields: Omit<
+      Parameters<typeof buildStellarInvocationAuditMetadata>[0],
+      'operation'
+    >,
   ): Promise<void> {
-    const base: Record<string, unknown> = {
-      entityType: 'stellar_invocation',
-      entityId: dto.operation,
-      stellarOperation: dto.operation,
-      actorUserId: req.user.id,
-      ...fields,
-    };
-    if (dto.operation === 'anchor_confession') {
-      base.confessionHash = dto.confessionHash;
-      base.timestamp = dto.timestamp;
-    }
     await this.auditLogService.log({
       actionType: AuditActionType.STELLAR_CONTRACT_INVOCATION,
-      context: { userId: req.user.id },
-      metadata: base,
+      context: buildAuditContextFromRequest(req as typeof req & {
+        requestId?: string;
+      }),
+      metadata: {
+        ...buildStellarInvocationAuditMetadata({
+          operation: dto.operation,
+          ...fields,
+        }),
+        actorUserId: req.user.id,
+      },
     });
   }
 }

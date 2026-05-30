@@ -1,23 +1,14 @@
-const BASE_API_URL = process.env.BACKEND_API_URL;
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
+import { getApiBaseUrl } from "@/app/lib/config";
+
+const BASE_API_URL = getApiBaseUrl();
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
-  if (!BASE_API_URL) {
-    return new Response(
-      JSON.stringify({
-        message: "Server misconfiguration: BACKEND_API_URL is not set.",
-      }),
-      {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
+  const correlationId = request.headers.get("X-Correlation-ID") || "unknown";
 
   try {
     const { id } = params;
     const backendUrl = `${BASE_API_URL}/users/${id}/public-profile`;
-
-    const correlationId = request.headers.get("X-Correlation-ID") || "unknown";
 
     const response = await fetch(backendUrl, {
       method: "GET",
@@ -26,23 +17,28 @@ export async function GET(request: Request, { params }: { params: { id: string }
       },
     });
 
-    const responseBody = await response.text();
-    const status = response.status;
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: response.status,
+        correlationId,
+        route: "GET /api/users/[id]/public-profile"
+      });
+    }
 
+    const responseBody = await response.text();
     return new Response(responseBody, {
-      status,
+      status: 200,
       headers: {
         "Content-Type": "application/json",
       },
     });
   } catch (error) {
-    console.error("Error proxying to backend:", error);
-    return new Response(
-      JSON.stringify({ message: "Internal server error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
+    return createApiErrorResponse(error, {
+      status: 500,
+      correlationId,
+      route: "GET /api/users/[id]/public-profile"
+    });
   }
 }
+

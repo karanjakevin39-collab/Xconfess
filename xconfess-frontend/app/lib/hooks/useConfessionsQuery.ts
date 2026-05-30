@@ -1,25 +1,25 @@
 "use client";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { getConfessions } from "@/app/lib/api/confessions";
 import type { GetConfessionsParams } from "@/app/lib/api/confessions";
 import { queryKeys } from "@/app/lib/api/queryKeys";
 
 const DEFAULT_LIMIT = 10;
 
-export interface UseConfessionsQueryParams
-  extends Omit<GetConfessionsParams, "page"> {
-  limit?: number;
-}
+/**
+ * Hook for fetching confessions with standard pagination.
+ * This has been standardized to use page/limit parameters for better
+ * state persistence across route transitions.
+ */
+export function useConfessionsQuery(params: GetConfessionsParams = {}) {
+  const { page = 1, limit = DEFAULT_LIMIT, ...rest } = params;
 
-export function useConfessionsQuery(params: UseConfessionsQueryParams = {}) {
-  const { limit = DEFAULT_LIMIT, ...rest } = params;
-
-  return useInfiniteQuery({
-    queryKey: queryKeys.confessions.list(rest),
-    queryFn: async ({ pageParam }) => {
+  return useQuery({
+    queryKey: [...queryKeys.confessions.list(rest), { page, limit }],
+    queryFn: async () => {
       const result = await getConfessions({
-        page: pageParam,
+        page,
         limit,
         ...rest,
       });
@@ -28,10 +28,6 @@ export function useConfessionsQuery(params: UseConfessionsQueryParams = {}) {
       }
       return result.data;
     },
-    initialPageParam: 1,
-    getNextPageParam: (lastPage, allPages) => {
-      if (!lastPage.hasMore) return undefined;
-      return allPages.length + 1;
-    },
+    placeholderData: (previousData) => previousData,
   });
 }

@@ -12,6 +12,7 @@ This is the canonical runbook for planning, building, deploying, and upgrading x
 - [Pre-Release Checklist](#pre-release-checklist)
 - [Toolchain Verification](#toolchain-verification)
 - [Build Phase](#build-phase)
+- [Artifact Checksum Review](#artifact-checksum-review)
 - [Deployment Phase](#deployment-phase)
 - [Post-Deployment Verification](#post-deployment-verification)
 - [Contract Reference](#contract-reference)
@@ -211,6 +212,70 @@ git commit -m "build: contract release manifest for version X.Y.Z"
 
 ---
 
+## Artifact Checksum Review
+
+`./scripts/contracts-release.sh build` and `./scripts/contracts-release.sh deploy`
+both generate SHA-256 metadata from the release WASM files. The hash is written
+to:
+
+- `deployments/contract-wasm-manifest.json` before deployment
+- `deployments/<network>.json` after deployment
+
+The hashes are generated inside `scripts/contracts-release.sh` by reading each
+built WASM artifact and computing `hashlib.sha256(content).hexdigest()`.
+
+### Recompute A Hash Locally
+
+Run the release build first so the manifest and WASM files are from the same
+source tree:
+
+```bash
+./scripts/contracts-release.sh build
+```
+
+Then recompute and compare one artifact hash:
+
+```bash
+export CONTRACT="confession-anchor"
+export WASM_PATH="$(jq -r --arg contract "$CONTRACT" '.contracts[$contract].wasm_file' deployments/contract-wasm-manifest.json)"
+export MANIFEST_SHA="$(jq -r --arg contract "$CONTRACT" '.contracts[$contract].sha256' deployments/contract-wasm-manifest.json)"
+
+sha256sum "xconfess-contracts/$WASM_PATH"
+printf 'manifest: %s\n' "$MANIFEST_SHA"
+```
+
+For macOS maintainers without `sha256sum`, use:
+
+```bash
+shasum -a 256 "xconfess-contracts/$WASM_PATH"
+```
+
+To verify every contract in the manifest:
+
+```bash
+jq -r '.contracts | to_entries[] | [.key, .value.wasm_file, .value.sha256] | @tsv' deployments/contract-wasm-manifest.json |
+while IFS=$'\t' read -r contract wasm_path expected_sha; do
+  actual_sha="$(sha256sum "xconfess-contracts/$wasm_path" | awk '{print $1}')"
+  test "$actual_sha" = "$expected_sha"
+  printf '%s %s\n' "$contract" "$actual_sha"
+done
+```
+
+### PR Review Checklist For Hash Changes
+
+- Confirm the PR includes source, dependency, compiler, or build-script changes
+  that explain every changed WASM hash.
+- Confirm `xconfess-contracts/contracts/*/Cargo.toml` versions changed when the
+  contract behavior or storage compatibility changed.
+- Re-run `./scripts/contracts-release.sh build` locally and compare the
+  regenerated `deployments/contract-wasm-manifest.json`.
+- Confirm no private key material, Stellar secret key, or local CLI account name
+  was added to deployment metadata.
+- Treat an unexplained hash-only diff as a release blocker until the artifact is
+  rebuilt from reviewed source.
+
+---
+
 ## Deployment Phase
 
 ### Step 1: Configure the Target Network
@@ -236,6 +301,35 @@ stellar network add-remote futurenet https://horizon-futurenet.stellar.org
 # Public/Mainnet
 stellar network add-remote public https://horizon.stellar.org
 ```
+
+### Mainnet Safety Gate
+
+Do not deploy to mainnet until the same commit has completed a clean testnet
+release.
+
+Required before any mainnet deployment:
+
+- Testnet deployment metadata is committed at `deployments/testnet.json`.
+- The [post-deployment verification checklist](#post-deployment-verification)
+  passed on testnet for all four contracts.
+- `deployments/contract-wasm-manifest.json` hashes match the WASM artifacts
+  promoted to mainnet.
+- Platform, security, and release owners approved the release in the PR or
+  release ticket.
+- Backend and frontend configuration changes for new contract IDs are prepared
+  and reviewed.
+- The rollback owner, pause owner, and release communication channel are named
+  in the release notes.
+
+Mainnet deployment command, after approvals:
+
+```bash
+./scripts/contracts-release.sh deploy --network public --source "$MAINNET_DEPLOYER_KEY"
+```
+
+Use the exact network alias configured in Stellar CLI. If the local alias is
+`mainnet` instead of `public`, record that alias in the release notes before
+deploying.
 
 ### Step 2: Ensure Deployer Account is Funded
 
@@ -308,55 +402,84 @@ git commit -m "deploy: contracts deployed to testnet, version X.Y.Z"
 
 ## Post-Deployment Verification
 
-### Step 1: Confirm Contracts Are On-Chain
+Set these variables from the deployment metadata before running the checklist:
 
 ```bash
-# Verify each contract exists on the network
-export CONFESSION_ANCHOR_ID="<id-from-deployment-metadata>"
+export NETWORK="testnet"
+export DEPLOYER_KEY="your-named-key"
 
-stellar contract info --id "$CONFESSION_ANCHOR_ID" --network testnet
+export CONFESSION_ANCHOR_ID="$(jq -r '.contracts["confession-anchor"].contract_id' deployments/$NETWORK.json)"
+export CONFESSION_REGISTRY_ID="$(jq -r '.contracts["confession-registry"].contract_id' deployments/$NETWORK.json)"
+export REPUTATION_BADGES_ID="$(jq -r '.contracts["reputation-badges"].contract_id' deployments/$NETWORK.json)"
+export ANONYMOUS_TIPPING_ID="$(jq -r '.contracts["anonymous-tipping"].contract_id' deployments/$NETWORK.json)"
+```
+
+### Step 1: Confirm All Contracts Are On-Chain
+
+```bash
+stellar contract info --id "$CONFESSION_ANCHOR_ID" --network "$NETWORK"
+stellar contract info --id "$CONFESSION_REGISTRY_ID" --network "$NETWORK"
+stellar contract info --id "$REPUTATION_BADGES_ID" --network "$NETWORK"
+stellar contract info --id "$ANONYMOUS_TIPPING_ID" --network "$NETWORK"
 ```
 
 Expected output includes contract code hash and other metadata.
 
-### Step 2: Test Contract Invocation
+### Step 2: Compare Deployment Hashes Against Local Artifacts
 
-Test at least one read-only function from each contract to confirm they are callable:
+Verify the committed deployment metadata still matches the local release
+artifacts:
 
 ```bash
-# Test ConfessionAnchor::get_version
+jq -r '.contracts | to_entries[] | [.key, .value.wasm_file, .value.sha256] | @tsv' "deployments/$NETWORK.json" |
+while IFS=$'\t' read -r contract wasm_path expected_sha; do
+  actual_sha="$(sha256sum "xconfess-contracts/$wasm_path" | awk '{print $1}')"
+  test "$actual_sha" = "$expected_sha"
+  printf '%s %s\n' "$contract" "$actual_sha"
+done
+```
+
+If this fails, stop the release and rebuild from the exact commit being
+deployed.
+
+### Step 3: Test Read-Only Contract Invocations
+
+Run at least one read-only invocation per contract where practical:
+
+```bash
+# ConfessionAnchor::get_version
 stellar contract invoke \
   --id "$CONFESSION_ANCHOR_ID" \
   --source "$DEPLOYER_KEY" \
-  --network testnet \
+  --network "$NETWORK" \
   -- get_version
 
-# Test ConfessionRegistry::governance with a query (if applicable)
-export CONFESSION_REGISTRY_ID="<id-from-deployment-metadata>"
+# ConfessionRegistry::get_total_count
 stellar contract invoke \
   --id "$CONFESSION_REGISTRY_ID" \
   --source "$DEPLOYER_KEY" \
-  --network testnet \
-  -- get_config
+  --network "$NETWORK" \
+  -- get_total_count
 
-# Test ReputationBadges::get_badge_count
-export REPUTATION_BADGES_ID="<id-from-deployment-metadata>"
+# ReputationBadges::get_total_badges
 stellar contract invoke \
   --id "$REPUTATION_BADGES_ID" \
   --source "$DEPLOYER_KEY" \
-  --network testnet \
-  -- get_badge_count
+  --network "$NETWORK" \
+  -- get_total_badges
 
-# Test AnonymousTipping::init or query
-export ANONYMOUS_TIPPING_ID="<id-from-deployment-metadata>"
+# AnonymousTipping::latest_settlement_nonce
 stellar contract invoke \
   --id "$ANONYMOUS_TIPPING_ID" \
   --source "$DEPLOYER_KEY" \
-  --network testnet \
-  -- init
+  --network "$NETWORK" \
+  -- latest_settlement_nonce
 ```
 
-### Step 3: Check Event Emission (if applicable)
+If a contract was intentionally deployed but not initialized, record that in the
+release notes and skip only the read call that requires initialization.
+
+### Step 4: Check Event Emission (if applicable)
 
 For contracts that emit events, verify events are being recorded:
 
@@ -364,11 +487,11 @@ For contracts that emit events, verify events are being recorded:
 # Fetch recent events from ConfessionAnchor
 stellar contract events \
   --id "$CONFESSION_ANCHOR_ID" \
-  --network testnet \
+  --network "$NETWORK" \
   --limit 10
 ```
 
-### Step 4: Backend and Frontend Integration
+### Step 5: Backend and Frontend Integration
 
 Once contract IDs are confirmed:
 
@@ -386,7 +509,7 @@ Once contract IDs are confirmed:
 
 **Key Functions:**
 - `anchor_confession(hash: BytesN<32>, timestamp: u64) -> Symbol` — Anchor a new confession hash. Returns "anchored" or "exists".
-- `verify_confession_hash(hash: BytesN<32>) -> bool` — Check if a hash has been anchored.
+- `verify_confession(hash: BytesN<32>) -> Option<u64>` — Return the anchored timestamp for a known hash.
 - `get_confession_count() -> u64` — Total number of anchored confessions.
 - `get_version() -> ContractVersionInfo` — Semantic version and build metadata.
 - `get_capabilities() -> ContractCapabilityInfo` — Supported features and schema versions.
@@ -401,7 +524,8 @@ Once contract IDs are confirmed:
 - `initialize(admin: Address)` — Set up contract with initial admin (call once at deployment).
 - `set_quorum(threshold: u32)` — Configure governance quorum threshold (admin only).
 - `gov_propose(proposer: Address, action: CriticalAction) -> u64` — Submit governance proposal.
-- `get_config() -> GovernanceConfig` — Query current governance configuration.
+- `get_total_count() -> u64` — Total number of registered confessions.
+- `list_confessions(cursor: Option<u64>, limit: u32) -> Page` — Paginated confession listing.
 
 **Important:** Registry is governance-controlled. Updates to critical settings require proposals.
 
@@ -412,8 +536,8 @@ Once contract IDs are confirmed:
 **Key Functions:**
 - `mint_badge(recipient: Address, badge_type: BadgeType) -> Result<u64, Error>` — Issue a badge to a user.
 - `revoke_badge(badge_id: u64)` — Remove a badge from the chain.
-- `get_user_badges(user: Address) -> Vec<u64>` — List all badges owned by a user.
-- `get_badge_count() -> u64` — Total badges in circulation.
+- `get_badges(owner: Address) -> Vec<Badge>` — List all badges owned by a user.
+- `get_total_badges() -> u64` — Total badges in circulation.
 
 **Badge Types (fixed):**
 - `ConfessionStarter` — First confession posted
@@ -458,6 +582,20 @@ If a contract deployment fails or causes issues:
 2. **Revert deployment records.**  Use the previous `deployments/<network>.json` file to identify the working contract IDs.
 3. **Restore backend/frontend config** to reference the old contract IDs.
 4. **Post-rollback analysis**: Review logs and contract invocation failures to understand what went wrong.
+
+### Pause Or Mitigate After Deployment
+
+If a deployed contract is live but unsafe to use:
+
+1. Disable backend/frontend code paths that send writes to the new contract IDs.
+2. For contracts with pause controls, follow
+   [`docs/contract-signer-rotation-runbook.md`](./contract-signer-rotation-runbook.md)
+   and the pause model in
+   [`xconfess-contracts/EMERGENCY_PAUSE_MODEL.md`](../xconfess-contracts/EMERGENCY_PAUSE_MODEL.md).
+3. Restore the previous known-good IDs from `deployments/<network>.json` in
+   service configuration.
+4. Follow the general release rollback checklist in
+   [`docs/release-readiness-checklist.md`](./release-readiness-checklist.md).
 
 ### Version Signaling
 

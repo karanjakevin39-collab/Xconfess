@@ -2,19 +2,32 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bull';
 import { NotificationService } from './notification.service';
-import { Notification, NotificationType } from '../entities/notification.entity';
+import {
+  Notification,
+  NotificationType,
+} from '../entities/notification.entity';
 import { NotificationPreference } from '../entities/notification-preference.entity';
 import { NOTIFICATION_QUEUE } from '../processors/notification.processor';
+import { AppLogger } from '../../logger/logger.service';
 
 describe('NotificationService', () => {
   let service: NotificationService;
   let queueMock: { add: jest.Mock };
-  let preferenceRepoMock: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
+  let preferenceRepoMock: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
   let notificationRepoMock: { create: jest.Mock; save: jest.Mock };
+  let appLoggerMock: { incrementCounter: jest.Mock };
 
   beforeEach(async () => {
     queueMock = {
       add: jest.fn().mockResolvedValue({ id: 'job-123' }),
+    };
+
+    appLoggerMock = {
+      incrementCounter: jest.fn(),
     };
 
     preferenceRepoMock = {
@@ -43,10 +56,17 @@ describe('NotificationService', () => {
           provide: getQueueToken(NOTIFICATION_QUEUE),
           useValue: queueMock,
         },
+        {
+          provide: AppLogger,
+          useValue: {
+            incrementCounter: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<NotificationService>(NotificationService);
+    appLoggerMock = module.get<AppLogger>(AppLogger) as any;
   });
 
   describe('createNotification', () => {
@@ -104,6 +124,39 @@ describe('NotificationService', () => {
 
       // Assert
       expect(queueMock.add).not.toHaveBeenCalled();
+    });
+
+    it('should emit queue enqueue metrics when scheduling a notification job', async () => {
+      // Arrange
+      preferenceRepoMock.findOne.mockResolvedValue({
+        userId: 'user-1',
+        enableInAppNotifications: true,
+        enableEmailNotifications: true,
+        emailAddress: 'test@example.com',
+        inAppNewMessage: true,
+        emailNewMessage: true,
+        enableQuietHours: false,
+      });
+
+      // Act
+      await service.createNotification({
+        userId: 'user-1',
+        type: NotificationType.NEW_MESSAGE,
+        title: 'Title',
+        message: 'Message',
+      });
+
+      // Assert
+      expect(queueMock.add).toHaveBeenCalledTimes(1);
+      expect(appLoggerMock.incrementCounter).toHaveBeenCalledWith(
+        'notification_queue_enqueued_total',
+        1,
+        expect.objectContaining({
+          queue: NOTIFICATION_QUEUE,
+          jobName: 'send-notification',
+          notificationType: NotificationType.NEW_MESSAGE,
+        }),
+      );
     });
   });
 });

@@ -8,6 +8,11 @@ import { ModerationRepositoryService } from '../moderation/moderation-repository
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppLogger } from '../logger/logger.service';
 import { ConfigService } from '@nestjs/config';
+import { AnonymousUserService } from '../user/anonymous-user.service';
+import { EncryptionService } from '../encryption/encryption.service';
+import { StellarService } from '../stellar/stellar.service';
+import { CacheService } from '../cache/cache.service';
+import { TagService } from './tag.service';
 
 describe('ConfessionService - Search Functionality', () => {
   let service: ConfessionService;
@@ -43,6 +48,10 @@ describe('ConfessionService - Search Functionality', () => {
         },
         { provide: EventEmitter2, useValue: { emit: jest.fn() } },
         {
+          provide: AnonymousUserService,
+          useValue: { create: jest.fn(), getAnonIdsForUser: jest.fn() },
+        },
+        {
           provide: AppLogger,
           useValue: {
             log: jest.fn(),
@@ -67,6 +76,31 @@ describe('ConfessionService - Search Functionality', () => {
               return defaultVal;
             }),
           },
+        },
+        {
+          provide: EncryptionService,
+          useValue: { encrypt: jest.fn(), decrypt: jest.fn() },
+        },
+        {
+          provide: StellarService,
+          useValue: {
+            processAnchorData: jest.fn(),
+            getExplorerUrl: jest.fn(),
+            verifyTransaction: jest.fn(),
+          },
+        },
+        {
+          provide: CacheService,
+          useValue: {
+            buildKey: jest.fn((...parts: string[]) => parts.join(':')),
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn(),
+            delPattern: jest.fn(),
+          },
+        },
+        {
+          provide: TagService,
+          useValue: { validateTags: jest.fn(), getTagByName: jest.fn() },
         },
       ],
     }).compile();
@@ -127,7 +161,12 @@ describe('ConfessionService - Search Functionality', () => {
 
       await service.search(searchDto);
 
-      expect(repository.hybridSearch).toHaveBeenCalledWith('love', 1, 10);
+      expect(repository.hybridSearch).toHaveBeenCalledWith(
+        'love',
+        1,
+        10,
+        searchDto,
+      );
     });
 
     it('should pass anonymousOnly filter to repository', async () => {
@@ -199,6 +238,7 @@ describe('ConfessionService - Search Functionality', () => {
         '!!!love???',
         1,
         10,
+        searchDto,
       );
     });
 
@@ -402,4 +442,3 @@ describe('ConfessionService - Search Functionality', () => {
     });
   });
 });
-

@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from "@/app/lib/config";
+import { createApiErrorResponse } from "@/lib/apiErrorHandler";
 
 const BASE_API_URL = getApiBaseUrl();
 
@@ -59,32 +60,12 @@ export async function GET(request: Request) {
     });
 
     if (!res.ok) {
-      const text = await res.text();
-      let body: { message?: string } = {};
-      try {
-        body = JSON.parse(text) as { message?: string };
-      } catch {
-        /* ignore */
-      }
-      return Response.json(
-        {
-          message: body.message ?? `Search failed: ${res.statusText}`,
-          errorType: "upstream_error",
-          degraded: true,
-          partial: false,
-          warnings: [],
-          confessions: [],
-          hasMore: false,
-          total: 0,
-          page,
-          meta: {
-            page,
-            limit,
-            searchType: "error",
-          },
-        },
-        { status: res.status }
-      );
+      const errData = await res.json().catch(() => ({}));
+      return createApiErrorResponse(errData, {
+        status: res.status,
+        fallbackMessage: `Search failed: ${res.statusText}`,
+        route: "GET /api/confessions/search"
+      });
     }
 
     const data = (await res.json()) as {
@@ -160,26 +141,10 @@ export async function GET(request: Request) {
       },
     });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Search service unavailable";
-    return Response.json(
-      {
-        message,
-        errorType: "network_error",
-        degraded: true,
-        partial: false,
-        warnings: [],
-        confessions: [],
-        hasMore: false,
-        total: 0,
-        page,
-        meta: {
-          page,
-          limit,
-          searchType: "error",
-        },
-      },
-      { status: 503 }
-    );
+    return createApiErrorResponse(err, {
+      status: 503,
+      fallbackMessage: "Search service unavailable",
+      route: "GET /api/confessions/search"
+    });
   }
 }

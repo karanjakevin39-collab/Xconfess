@@ -187,6 +187,24 @@ export const getErrorStatusCode = (error: unknown): number => {
   return 500;
 };
 
+/**
+ * Extract the backend `requestId` from an API error response.
+ * Issue #801 — used to surface the correlation ID in failure toasts.
+ */
+export const extractRequestId = (error: unknown): string | undefined => {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as Record<string, unknown> | undefined;
+    if (!data) return undefined;
+    const id = data['requestId'] ?? data['request_id'] ?? data['correlationId'];
+    return typeof id === 'string' ? id : undefined;
+  }
+  if (error instanceof AppError) {
+    const id = error.details?.['requestId'] ?? error.details?.['correlationId'];
+    return typeof id === 'string' ? id : undefined;
+  }
+  return undefined;
+};
+
 export const toAppError = (error: unknown, contextMessage?: string): AppError => {
   if (error instanceof AppError) {
     return error;
@@ -196,11 +214,18 @@ export const toAppError = (error: unknown, contextMessage?: string): AppError =>
     const status = error.response?.status ?? 500;
     const message = getErrorMessage(error);
     const code = getErrorCode(error);
+    const responseData = error.response?.data as Record<string, unknown> | undefined;
+    const requestId =
+      responseData?.['requestId'] ??
+      responseData?.['request_id'] ??
+      (error.config as any)?.correlationId;
     const details: Record<string, unknown> = {
       url: error.config?.url,
       method: error.config?.method,
       correlationId: (error.config as any)?.correlationId,
-      responseData: error.response?.data,
+      responseData,
+      // Normalised key so toast consumers only need to check `requestId`.
+      ...(typeof requestId === 'string' ? { requestId } : {}),
     };
     return new AppError(message, code, status, details);
   }

@@ -32,6 +32,9 @@ export const envValidationSchema = Joi.object({
   TYPEORM_SYNCHRONIZE: Joi.string()
     .valid('true', 'false', '1', '0', 'yes', 'no', 'on', 'off')
     .optional(),
+  TYPEORM_MIGRATIONS_RUN: Joi.string()
+    .valid('true', 'false', '1', '0', 'yes', 'no', 'on', 'off')
+    .optional(),
 
   // ── Auth ──────────────────────────────────────────────────────────────
   JWT_SECRET: Joi.string().min(8).required().messages({
@@ -66,6 +69,9 @@ export const envValidationSchema = Joi.object({
   REPUTATION_BADGES_CONTRACT_ID: Joi.string().optional(),
   TIPPING_SYSTEM_CONTRACT_ID: Joi.string().optional(),
   STELLAR_SERVER_SECRET: Joi.string().optional(),
+
+  // ── Tipping SLA ────────────────────────────────────────────────────────
+  TIP_VERIFICATION_STALE_THRESHOLD_MINUTES: Joi.number().min(1).default(30),
 
   // ── Email (primary) ──────────────────────────────────────────────────
   MAIL_HOST: Joi.string().default('smtp.ethereal.email'),

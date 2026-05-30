@@ -24,11 +24,24 @@ const MIN_TIP_AMOUNT = 0.1;
 // -------------------- Types --------------------
 
 export type NetworkKind = "testnet" | "mainnet" | "unknown";
+export type TipStatus = "pending" | "confirmed" | "failed" | "stale_pending";
 
 export interface TipStats {
   totalAmount: number;
   totalCount: number;
   averageAmount: number;
+}
+
+export interface VerifyTipParams {
+  confessionId: string;
+  signedXdr: string;
+}
+
+export interface TipVerificationResult {
+  tipId: string;
+  status: TipStatus;
+  confirmedAt?: string;
+  failureReason?: string;
 }
 
 export interface Tip {
@@ -176,4 +189,35 @@ export async function getTipStats(confessionId: string): Promise<TipStats | null
   } catch {
     return null;
   }
+}
+
+// -------------------- Backend Integration --------------------
+
+export async function verifySignedTip(
+  params: VerifyTipParams,
+): Promise<TipVerificationResult> {
+  const response = await fetch("/api/tips/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      body?.message ?? `Tip verification failed (${response.status})`,
+    );
+  }
+
+  return response.json() as Promise<TipVerificationResult>;
+}
+
+export async function fetchTipStatus(
+  tipId: string,
+): Promise<TipVerificationResult> {
+  const response = await fetch(`/api/tips/${tipId}/status`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tip status (${response.status})`);
+  }
+  return response.json() as Promise<TipVerificationResult>;
 }

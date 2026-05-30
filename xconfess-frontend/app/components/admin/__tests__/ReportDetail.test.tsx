@@ -1,0 +1,239 @@
+import React from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import ReportDetail from '../ReportDetail';
+import { adminApi } from '@/app/lib/api/admin';
+import type { Report } from '@/app/lib/api/admin';
+
+// ---------------------------------------------------------------------------
+// Module mocks
+// ---------------------------------------------------------------------------
+
+const mockToast = { success: jest.fn(), error: jest.fn() };
+
+jest.mock('@/app/components/common/Toast', () => ({
+  useGlobalToast: () => mockToast,
+}));
+
+jest.mock('@/app/lib/api/admin', () => ({
+  adminApi: {
+    resolveReport: jest.fn(),
+    dismissReport: jest.fn(),
+    deleteConfession: jest.fn(),
+    hideConfession: jest.fn(),
+    getAuditLogs: jest.fn().mockResolvedValue({ logs: [] }),
+  },
+}));
+
+jest.mock('@/app/components/admin/ReportModerationTimeline', () => ({
+  ReportModerationTimeline: () => null,
+  buildReportModerationTimeline: () => [],
+}));
+
+jest.mock('@/app/lib/utils/moderationTemplates', () => ({
+  MODERATION_TEMPLATES: { report_resolved: [], report_dismissed: [] },
+}));
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const mockReport: Report = {
+  id: 'report-1',
+  confessionId: 'confession-1',
+  reporterId: null,
+  type: 'spam',
+  reason: 'Test spam reason',
+  status: 'pending',
+  resolvedBy: null,
+  resolvedAt: null,
+  resolutionNotes: null,
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T00:00:00Z',
+};
+
+function renderDetail(props: Partial<React.ComponentProps<typeof ReportDetail>> = {}) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const onBack = jest.fn();
+  const onActionSuccess = jest.fn();
+  const utils = render(
+    <QueryClientProvider client={qc}>
+      <ReportDetail
+        report={mockReport}
+        onBack={onBack}
+        onActionSuccess={onActionSuccess}
+        {...props}
+      />
+    </QueryClientProvider>,
+  );
+  return { ...utils, onBack, onActionSuccess };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  (adminApi.getAuditLogs as jest.Mock).mockResolvedValue({ logs: [] });
+});
+
+describe('ReportDetail — resolve flow', () => {
+  it('opens the resolve confirmation dialog when Resolve Report is clicked', async () => {
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+
+    expect(screen.getByText('Resolve report?')).toBeInTheDocument();
+  });
+
+  it('shows loading state on the confirm button while the resolve request is in-flight', async () => {
+    let settle!: () => void;
+    const pending = new Promise<{ id: string }>((res) => {
+      settle = () => res({ id: 'report-1' });
+    });
+    (adminApi.resolveReport as jest.Mock).mockReturnValue(pending);
+
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+    await user.click(screen.getByRole('button', { name: /^resolve$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /processing/i })).toBeDisabled();
+    });
+
+    settle();
+  });
+
+  it('calls onActionSuccess and shows success toast after resolve completes', async () => {
+    (adminApi.resolveReport as jest.Mock).mockResolvedValue({});
+
+    const user = userEvent.setup();
+    const { onActionSuccess } = renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+    await user.click(screen.getByRole('button', { name: /^resolve$/i }));
+
+    await waitFor(() => expect(onActionSuccess).toHaveBeenCalledTimes(1));
+    expect(mockToast.success).toHaveBeenCalledWith('Report resolved.');
+  });
+
+  it('shows an error toast and does not call onActionSuccess when resolve fails', async () => {
+    (adminApi.resolveReport as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+    const user = userEvent.setup();
+    const { onActionSuccess } = renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+    await user.click(screen.getByRole('button', { name: /^resolve$/i }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Failed to resolve report'));
+    expect(onActionSuccess).not.toHaveBeenCalled();
+  });
+
+  it('closes the dialog after a successful resolve', async () => {
+    (adminApi.resolveReport as jest.Mock).mockResolvedValue({});
+
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+    expect(screen.getByText('Resolve report?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^resolve$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Resolve report?')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('ReportDetail — dismiss flow', () => {
+  it('opens the dismiss confirmation dialog when Dismiss Report is clicked', async () => {
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /dismiss report/i }));
+
+    expect(screen.getByText('Dismiss report?')).toBeInTheDocument();
+  });
+
+  it('shows loading state on the confirm button while the dismiss request is in-flight', async () => {
+    let settle!: () => void;
+    const pending = new Promise<{ id: string }>((res) => {
+      settle = () => res({ id: 'report-1' });
+    });
+    (adminApi.dismissReport as jest.Mock).mockReturnValue(pending);
+
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /dismiss report/i }));
+    await user.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /processing/i })).toBeDisabled();
+    });
+
+    settle();
+  });
+
+  it('calls onActionSuccess and shows success toast after dismiss completes', async () => {
+    (adminApi.dismissReport as jest.Mock).mockResolvedValue({});
+
+    const user = userEvent.setup();
+    const { onActionSuccess } = renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /dismiss report/i }));
+    await user.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(onActionSuccess).toHaveBeenCalledTimes(1));
+    expect(mockToast.success).toHaveBeenCalledWith('Report dismissed.');
+  });
+
+  it('shows an error toast and does not call onActionSuccess when dismiss fails', async () => {
+    (adminApi.dismissReport as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+    const user = userEvent.setup();
+    const { onActionSuccess } = renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /dismiss report/i }));
+    await user.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Failed to dismiss report'));
+    expect(onActionSuccess).not.toHaveBeenCalled();
+  });
+
+  it('closes the dialog after a successful dismiss', async () => {
+    (adminApi.dismissReport as jest.Mock).mockResolvedValue({});
+
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /dismiss report/i }));
+    expect(screen.getByText('Dismiss report?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Dismiss report?')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('ReportDetail — dialog cancel', () => {
+  it('closes the dialog without calling any API when Cancel is clicked', async () => {
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /resolve report/i }));
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+    expect(screen.queryByText('Resolve report?')).not.toBeInTheDocument();
+    expect(adminApi.resolveReport).not.toHaveBeenCalled();
+  });
+});

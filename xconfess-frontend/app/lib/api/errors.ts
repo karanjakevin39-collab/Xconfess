@@ -12,6 +12,7 @@ export interface ApiError {
   message: string;
   code?: string;
   status?: number;
+  retryAfter?: number;
 }
 
 // Keep the local map as a stable override; share default map from errorHandler
@@ -28,10 +29,17 @@ export async function normalizeApiError(
   if (responseOrError instanceof Response) {
     const status = responseOrError.status;
     let message = STATUS_MESSAGES[status];
+    let retryAfter: number | undefined;
     try {
       const body = await responseOrError.json();
       const raw = (body && (body.message ?? body.error ?? body.msg)) ?? null;
       if (typeof raw === "string" && raw.length > 0) message = raw;
+      if (status === 429) {
+        const bodyRetryAfter = body.retryAfter;
+        if (typeof bodyRetryAfter === "number") {
+          retryAfter = bodyRetryAfter;
+        }
+      }
     } catch {
       // keep default message
     }
@@ -39,6 +47,7 @@ export async function normalizeApiError(
       message: message ?? "An error occurred. Please try again.",
       code: STATUS_CODES[status] ?? "REQUEST_FAILED",
       status,
+      retryAfter,
     };
   }
 
@@ -48,6 +57,7 @@ export async function normalizeApiError(
     message: appError.message,
     code: appError.code,
     status: appError.statusCode,
+    retryAfter: appError.retryAfter,
   };
 }
 

@@ -42,8 +42,8 @@ describe('parameter.encoder', () => {
 
     it('encodes a hex string', () => {
       const val = encodeBytesParam('deadbeef');
-      const native = StellarSDK.scValToNative(val) as Buffer;
-      expect(native.toString('hex')).toBe('deadbeef');
+      const native = StellarSDK.scValToNative(val) as Uint8Array;
+      expect(Buffer.from(native).toString('hex')).toBe('deadbeef');
     });
   });
 
@@ -114,8 +114,8 @@ describe('parameter.encoder', () => {
 
       const [bytesVal, u64Val] = encodeContractArgs(args);
 
-      const decodedBytes = StellarSDK.scValToNative(bytesVal) as Buffer;
-      expect(decodedBytes.toString('hex')).toBe(hash);
+      const decodedBytes = StellarSDK.scValToNative(bytesVal) as Uint8Array;
+      expect(Buffer.from(decodedBytes).toString('hex')).toBe(hash);
 
       expect(Number(StellarSDK.scValToNative(u64Val))).toBe(ts);
     });
