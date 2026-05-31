@@ -107,11 +107,10 @@ export class ReportsService {
           anonymousReporterId: context.anonymousUserId,
         });
       } else {
-        // No stable identity for anonymous reporter, allow but log
-        this.logger.warn(
-          `Anonymous report without anonymousUserId for confession ${confessionId}`,
+        // Issue #1012: Anonymous reports MUST have an identity to enforce rate limits/deduplication
+        throw new BadRequestException(
+          'Anonymous reports require a valid anonymous identity',
         );
-        // For now, allow it, but in future, reject
       }
 
       const existingReport = await qb.getOne();
