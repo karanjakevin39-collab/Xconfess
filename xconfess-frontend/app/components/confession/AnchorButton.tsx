@@ -131,7 +131,7 @@ export const AnchorButton: FC<AnchorButtonProps> = ({
 
   if (anchored && txHash) {
     return (
-      <div className={cn("flex items-center gap-2", className)}>
+      <div className={cn("stellar-anchor-action flex items-center gap-2", className)}>
         <CheckCircle2 className="h-4 w-4 text-green-400" />
         <span className="text-xs text-zinc-400">Anchored</span>
         <a
@@ -148,7 +148,7 @@ export const AnchorButton: FC<AnchorButtonProps> = ({
 
   if (walletCTA.status === "not-installed") {
     return (
-      <div className={cn("flex flex-col gap-1.5", className)}>
+      <div className={cn("stellar-wallet-cta stellar-anchor-action flex flex-col gap-1.5", className)}>
         <div className="flex items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-1.5">
           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 text-yellow-500" />
           <span className="text-xs text-yellow-400">{walletCTA.guidance}</span>
@@ -158,7 +158,7 @@ export const AnchorButton: FC<AnchorButtonProps> = ({
   }
 
   return (
-    <div className={cn("flex flex-col gap-1", className)}>
+    <div className={cn("stellar-anchor-action flex flex-col gap-1", className)}>
       <Button
         variant="outline"
         size="sm"
@@ -167,7 +167,7 @@ export const AnchorButton: FC<AnchorButtonProps> = ({
         className={cn(
           "h-7 px-2 text-xs",
           walletCTA.status === "not-connected" &&
-            "border-blue-500/40 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300",
+            "stellar-wallet-cta border-blue-500/40 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300",
         )}
       >
         {isAnchoring || (isLoading && isConnected) ? (

@@ -32,20 +32,24 @@ export const OnboardingFlow = () => {
     markWelcomeSeen();
     setShowWelcome(false);
 
-    // Wait until the DOM has rendered the targets
+    const OPTIONAL_STEP_IDS = new Set(["stellar-wallet", "anchor-action"]);
+
     const startWhenReady = () => {
-      const allExist = ONBOARDING_STEPS.every((step) =>
+      const requiredSteps = ONBOARDING_STEPS.filter(
+        (step) => !OPTIONAL_STEP_IDS.has(step.id),
+      );
+      const requiredExist = requiredSteps.every((step) =>
         document.querySelector(step.target),
       );
 
-      if (allExist) {
-        setRunTour(true); // Start tour
+      if (requiredExist) {
+        setRunTour(true);
       } else {
-        setTimeout(startWhenReady, 100); // retry
+        setTimeout(startWhenReady, 100);
       }
     };
 
-    setTimeout(startWhenReady, 300); // small delay for modal to close
+    setTimeout(startWhenReady, 300);
   };
 
   const handleSkipWelcome = () => {
