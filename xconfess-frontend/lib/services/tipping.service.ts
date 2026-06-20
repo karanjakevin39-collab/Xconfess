@@ -13,6 +13,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { ActivityStatus } from "@/app/lib/types/activity";
+import { getApiBaseUrl } from "@/app/lib/config";
 import {
   isFreighterInstalled,
   freighterGetPublicKey,
@@ -53,6 +54,13 @@ export interface Tip {
   createdAt: string;
 }
 
+export interface VerifyTipResult {
+  success: boolean;
+  tip?: Tip;
+  error?: string;
+  isIdempotent?: boolean;
+}
+
 // -------------------- Helpers --------------------
 
 function getStellarNetwork(): string {
@@ -71,7 +79,12 @@ function classifyTipError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
 
-  if (normalized.includes("reject") || normalized.includes("declin") || normalized.includes("denied") || normalized.includes("cancel")) {
+  if (
+    normalized.includes("reject") ||
+    normalized.includes("declin") ||
+    normalized.includes("denied") ||
+    normalized.includes("cancel")
+  ) {
     return "Transaction was rejected in your wallet.";
   }
 
@@ -84,6 +97,37 @@ function classifyTipError(error: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function tippingApiUrl(path: string): string {
+  return `${getApiBaseUrl().replace(/\/$/, "")}${path}`;
+}
+
+function getResponseMessage(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const message = (body as { message?: unknown }).message;
+  if (Array.isArray(message)) return message.join(" ");
+  return typeof message === "string" ? message : undefined;
+}
+
+function isReplayResponse(status: number, message = ""): boolean {
+  if (status !== 400 && status !== 409) return false;
+  return /already (verified|recorded|processed)|idempotent|duplicate|replay/i.test(
+    message,
+  );
+}
+
+function shouldPollVerification(status: number, message = ""): boolean {
+  return (
+    status === 404 ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500 ||
+    /pending|not (yet )?(found|confirmed)|try again|timeout|temporar/i.test(
+      message,
+    )
+  );
 }
 
 // -------------------- Fake Checker --------------------
@@ -111,11 +155,14 @@ export async function isFreighterAvailable(): Promise<boolean> {
 export async function sendTip(
   confessionId: string,
   amount: number,
-  recipientAddress: string
+  recipientAddress: string,
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
   try {
     if (amount < MIN_TIP_AMOUNT) {
-      return { success: false, error: `Minimum tip amount is ${MIN_TIP_AMOUNT} XLM` };
+      return {
+        success: false,
+        error: `Minimum tip amount is ${MIN_TIP_AMOUNT} XLM`,
+      };
     }
 
     if (!isFreighterInstalled()) {
@@ -135,20 +182,35 @@ export async function sendTip(
     const senderAccount = await server.loadAccount(publicKey);
 
     // Validate recipient
-    try { Keypair.fromPublicKey(recipientAddress); } catch {
+    try {
+      Keypair.fromPublicKey(recipientAddress);
+    } catch {
       return { success: false, error: "Invalid recipient address" };
     }
 
-    const transaction = new TransactionBuilder(senderAccount, { fee: BASE_FEE, networkPassphrase: network })
-      .addOperation(Operation.payment({ destination: recipientAddress, asset: Asset.native(), amount: amount.toString() }))
+    const transaction = new TransactionBuilder(senderAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: network,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: recipientAddress,
+          asset: Asset.native(),
+          amount: amount.toString(),
+        }),
+      )
       .setTimeout(30)
       .build();
 
-    const signedXDR = await freighterSignTransaction(transaction.toXDR(), network);
+    const signedXDR = await freighterSignTransaction(
+      transaction.toXDR(),
+      network,
+    );
     const tx = TransactionBuilder.fromXDR(signedXDR, network);
     const result = await server.submitTransaction(tx);
 
-    if (!result.hash) return { success: false, error: "No transaction hash returned" };
+    if (!result.hash)
+      return { success: false, error: "No transaction hash returned" };
 
     return { success: true, txHash: result.hash };
   } catch (error) {
@@ -161,29 +223,56 @@ export async function sendTip(
 
 export async function verifyTip(
   confessionId: string,
-  txHash: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const res = await fetch(`/api/confessions/${confessionId}/verify-tip`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ txHash }),
-    });
-    if (!res.ok) {
+  txHash: string,
+): Promise<VerifyTipResult> {
+  const maxAttempts = 2;
+  let lastError = "Backend verification is still pending.";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(
+        tippingApiUrl(`/confessions/${confessionId}/tips/verify`),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ txId: txHash }),
+        },
+      );
       const data = await res.json().catch(() => ({}));
-      return { success: false, error: data?.message || "Verification failed" };
+      const message = getResponseMessage(data);
+
+      // Replaying the same verified transaction is a successful, stable state.
+      if (res.ok || isReplayResponse(res.status, message)) {
+        return {
+          success: true,
+          tip: (data as { tip?: Tip }).tip,
+          isIdempotent:
+            isReplayResponse(res.status, message) ||
+            (data as { isIdempotent?: boolean }).isIdempotent,
+        };
+      }
+
+      lastError = message || `Verification failed (${res.status})`;
+      if (!shouldPollVerification(res.status, lastError)) break;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
     }
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+
+    if (attempt < maxAttempts - 1) await sleep(1000);
   }
+
+  return { success: false, error: lastError };
 }
 
 // -------------------- Get Tip Stats --------------------
 
-export async function getTipStats(confessionId: string): Promise<TipStats | null> {
+export async function getTipStats(
+  confessionId: string,
+): Promise<TipStats | null> {
   try {
-    const res = await fetch(`/api/confessions/${confessionId}/tip-stats`);
+    const res = await fetch(
+      tippingApiUrl(`/confessions/${confessionId}/tips/stats`),
+    );
     if (!res.ok) return null;
     return (await res.json()) as TipStats;
   } catch {

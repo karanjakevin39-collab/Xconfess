@@ -9,7 +9,11 @@ import {
   getTipStats,
 } from "@/lib/services/tipping.service";
 import { connectedWallet } from "@/tests/mocks/wallet-fixtures";
-import { successfulAnchorResult, rejectedAnchorResult, timeoutAnchorResult } from "@/tests/mocks/anchor-fixtures";
+import {
+  successfulAnchorResult,
+  rejectedAnchorResult,
+  timeoutAnchorResult,
+} from "@/tests/mocks/anchor-fixtures";
 
 jest.mock("@/lib/hooks/useWallet", () => ({
   useWallet: jest.fn(),
@@ -63,10 +67,51 @@ describe("TipButton", () => {
         "GABCDEFGHIJKLMNOPQRSTUV1234567890ABCDEFGHIJKLMNOPQRSTUV",
       );
     });
-    expect(mockVerifyTip).toHaveBeenCalledWith("confession-123", successfulAnchorResult.txHash);
+    expect(mockVerifyTip).toHaveBeenCalledWith(
+      "confession-123",
+      successfulAnchorResult.txHash,
+    );
     expect(
       await screen.findByText(/tip sent successfully/i),
     ).toBeInTheDocument();
+  });
+
+  it("stays verifying until confirmation and then refreshes tip totals", async () => {
+    const user = userEvent.setup();
+    let confirmVerification!: (value: { success: true }) => void;
+    const verification = new Promise<{ success: true }>((resolve) => {
+      confirmVerification = resolve;
+    });
+
+    mockSendTip.mockResolvedValue(successfulAnchorResult);
+    mockVerifyTip.mockReturnValue(verification);
+    mockGetTipStats
+      .mockResolvedValueOnce({
+        totalAmount: 0,
+        totalCount: 0,
+        averageAmount: 0,
+      })
+      .mockResolvedValueOnce({
+        totalAmount: 0.1,
+        totalCount: 1,
+        averageAmount: 0.1,
+      });
+
+    renderTipButton();
+
+    await user.click(screen.getByRole("button", { name: /tip confession/i }));
+    await user.click(screen.getByRole("button", { name: /send 0.1 xlm tip/i }));
+
+    expect(
+      await screen.findByText("Verifying transaction"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Tip confirmed")).not.toBeInTheDocument();
+
+    confirmVerification({ success: true });
+
+    expect(await screen.findByText("Tip confirmed")).toBeInTheDocument();
+    expect(await screen.findByText(/0.10 XLM total/)).toBeInTheDocument();
+    expect(mockGetTipStats).toHaveBeenCalledTimes(2);
   });
 
   it("shows a clear rejection message when wallet signing is rejected", async () => {
@@ -102,7 +147,10 @@ describe("TipButton", () => {
     const user = userEvent.setup();
     mockSendTip.mockResolvedValue({ success: true, txHash: "tx-retry-1" });
     mockVerifyTip
-      .mockResolvedValueOnce({ success: false, error: "temporary backend timeout" })
+      .mockResolvedValueOnce({
+        success: false,
+        error: "temporary backend timeout",
+      })
       .mockResolvedValueOnce({ success: true, tip: undefined });
 
     renderTipButton();
@@ -115,7 +163,9 @@ describe("TipButton", () => {
     ).toBeInTheDocument();
     expect(mockVerifyTip).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("button", { name: /retry verification/i }));
+    await user.click(
+      screen.getByRole("button", { name: /retry verification/i }),
+    );
 
     await waitFor(() => {
       expect(mockVerifyTip).toHaveBeenCalledTimes(2);
@@ -128,18 +178,20 @@ describe("TipButton", () => {
 
   it("prevents duplicate tip submissions while one is in-flight", async () => {
     const user = userEvent.setup();
-    
+
     let resolveSend: (value: any) => void;
     const sendPromise = new Promise((resolve) => {
       resolveSend = resolve;
     });
-    
+
     mockSendTip.mockReturnValue(sendPromise);
 
     renderTipButton();
 
     await user.click(screen.getByRole("button", { name: /tip/i }));
-    const sendButton = screen.getByRole("button", { name: /send 0.1 xlm tip/i });
+    const sendButton = screen.getByRole("button", {
+      name: /send 0.1 xlm tip/i,
+    });
 
     // First click
     await user.click(sendButton);
@@ -163,7 +215,7 @@ describe("TipButton", () => {
 
   it("prevents duplicate verification retries while one is in-flight", async () => {
     const user = userEvent.setup();
-    
+
     // Setup initial failed verification to show the retry button
     mockSendTip.mockResolvedValue({ success: true, txHash: "tx-verif-retry" });
     mockVerifyTip.mockResolvedValueOnce({ success: false, error: "pending" });
@@ -173,14 +225,16 @@ describe("TipButton", () => {
     await user.click(screen.getByRole("button", { name: /tip/i }));
     await user.click(screen.getByRole("button", { name: /send 0.1 xlm tip/i }));
 
-    const retryButton = await screen.findByRole("button", { name: /retry verification/i });
+    const retryButton = await screen.findByRole("button", {
+      name: /retry verification/i,
+    });
 
     // Setup deferred verify promise
     let resolveVerify: (value: any) => void;
     const verifyPromise = new Promise((resolve) => {
       resolveVerify = resolve;
     });
-    
+
     mockVerifyTip.mockReturnValue(verifyPromise);
 
     // Click retry
@@ -190,7 +244,7 @@ describe("TipButton", () => {
     // Verify disabled and multiple clicks ignored
     expect(retryButton).toBeDisabled();
     await user.click(retryButton);
-    
+
     expect(mockVerifyTip).toHaveBeenCalledTimes(2);
 
     // Resolve

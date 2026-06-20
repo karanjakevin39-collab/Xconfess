@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   sendTip,
   verifyTip,
@@ -24,6 +24,13 @@ interface TipButtonProps {
 const MIN_TIP_AMOUNT = 0.1;
 const TIP_STEP = 0.1;
 const TIP_UNIT = "XLM";
+type TipLifecycle = "idle" | "submitting" | "verifying" | "success" | "failed";
+
+interface SubmittedTip {
+  hash: string;
+  amount: number;
+  activityId: string;
+}
 
 function parseTipAmount(rawAmount: string): number | null {
   if (rawAmount.trim() === "") return null;
@@ -37,15 +44,27 @@ function getTipAmountValidationError(value: string): string | null {
   if (amount === null) return "Enter a valid numeric amount.";
   if (amount === 0) return "Tip amount must be greater than zero.";
   if (amount < 0) return "Tip amount cannot be negative.";
-  if (amount < MIN_TIP_AMOUNT) return `Minimum tip is ${MIN_TIP_AMOUNT} ${TIP_UNIT}.`;
+  if (amount < MIN_TIP_AMOUNT)
+    return `Minimum tip is ${MIN_TIP_AMOUNT} ${TIP_UNIT}.`;
   return null;
 }
 
 function Spinner() {
   return (
     <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+      />
     </svg>
   );
 }
@@ -60,15 +79,16 @@ export const TipButton = ({
 
   const [isOpen, setIsOpen] = useState(false);
   const [tipAmount, setTipAmount] = useState(String(MIN_TIP_AMOUNT));
-  const [isSending, setIsSending] = useState(false);
+  const [lifecycle, setLifecycle] = useState<TipLifecycle>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [confirmedTx, setConfirmedTx] = useState<{ hash: string; amount: number } | null>(null);
-  const [pendingTxHash, setPendingTxHash] = useState<string | null>(null);
+  const [transaction, setTransaction] = useState<SubmittedTip | null>(null);
   const [stats, setStats] = useState<TipStats | null>(initialStats || null);
+  const inFlightRef = useRef(false);
 
   const wallet = useWallet();
   const { isConnected, connect } = wallet;
-  const walletCTA = getWalletCTAState(wallet, { extraDisabled: isSending });
+  const isBusy = lifecycle === "submitting" || lifecycle === "verifying";
+  const walletCTA = getWalletCTAState(wallet, { extraDisabled: isBusy });
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -84,16 +104,18 @@ export const TipButton = ({
   };
 
   const handleTip = async () => {
-    if (isSending) return;
+    if (inFlightRef.current || isBusy) return;
 
     if (!recipientAddress) {
       setError("Recipient address not available");
+      setLifecycle("failed");
       return;
     }
 
     const validationError = getTipAmountValidationError(tipAmount);
     if (validationError) {
       setError(validationError);
+      setLifecycle("failed");
       return;
     }
 
@@ -104,13 +126,15 @@ export const TipButton = ({
         await connect();
       } catch {
         setError("Connect your Freighter wallet to send tips");
+        setLifecycle("failed");
         return;
       }
     }
 
-    setIsSending(true);
+    inFlightRef.current = true;
+    setLifecycle("submitting");
     setError(null);
-    setConfirmedTx(null);
+    setTransaction(null);
 
     const activityId = uuidv4();
     addActivity({
@@ -130,18 +154,16 @@ export const TipButton = ({
       }
 
       updateActivity(activityId, { txHash: result.txHash });
+      const submittedTip = { hash: result.txHash, amount, activityId };
+      setTransaction(submittedTip);
+      setLifecycle("verifying");
 
       const verifyResult = await verifyTip(confessionId, result.txHash);
 
       if (!verifyResult.success) {
-        setPendingTxHash(result.txHash);
-
-        updateActivity(activityId, {
-          status: "submitted",
-          updatedAt: Date.now(),
-        });
-
-        return;
+        throw new Error(
+          verifyResult.error || "Backend verification is still pending.",
+        );
       }
 
       updateActivity(activityId, {
@@ -149,63 +171,63 @@ export const TipButton = ({
         updatedAt: Date.now(),
       });
 
-      setConfirmedTx({ hash: result.txHash, amount });
+      setLifecycle("success");
       setTipAmount(String(MIN_TIP_AMOUNT));
-      setPendingTxHash(null);
       await refreshStats();
-    } catch (err: any) {
+    } catch (err) {
       updateActivity(activityId, {
         status: "failed",
         updatedAt: Date.now(),
       });
-
-      if (err.message === "Verification pending") {
-        setError(
-          "Transaction submitted but verification is taking longer than expected. " +
-          "You can retry verification below.",
-        );
-      } else {
-        setError(err.message || "Failed to send tip");
-      }
+      setLifecycle("failed");
+      setError(err instanceof Error ? err.message : "Failed to send tip");
     } finally {
-      setIsSending(false);
+      inFlightRef.current = false;
     }
   };
 
   const handleVerify = async () => {
-    if (isSending || !pendingTxHash) return;
+    if (inFlightRef.current || !transaction) return;
 
-    setIsSending(true);
+    inFlightRef.current = true;
+    setLifecycle("verifying");
     setError(null);
 
     try {
-      const verifyResult = await verifyTip(confessionId, pendingTxHash);
+      const verifyResult = await verifyTip(confessionId, transaction.hash);
 
       if (!verifyResult.success) {
-        throw new Error("Verification still pending");
+        throw new Error(
+          verifyResult.error || "Backend verification is still pending.",
+        );
       }
 
-      setConfirmedTx({ hash: pendingTxHash, amount: parseFloat(tipAmount) });
-      setPendingTxHash(null);
+      updateActivity(transaction.activityId, {
+        status: "confirmed",
+        updatedAt: Date.now(),
+      });
+      setLifecycle("success");
+      setTipAmount(String(MIN_TIP_AMOUNT));
       await refreshStats();
-    } catch (err: any) {
+    } catch (err) {
+      updateActivity(transaction.activityId, {
+        status: "failed",
+        updatedAt: Date.now(),
+      });
+      setLifecycle("failed");
       setError(
-        "Verification not yet confirmed. The transaction may still be processing on the Stellar network. " +
-        "Please wait a moment and try again, or check the explorer link below.",
+        `${err instanceof Error ? err.message : "Verification failed"} ` +
+          "Your XLM transaction was submitted; wait a moment and retry verification or check it on Stellar Expert.",
       );
     } finally {
-      setIsSending(false);
+      inFlightRef.current = false;
     }
   };
 
   const totalAmount = stats?.totalAmount || 0;
   const tipCount = stats?.totalCount || 0;
 
-  const explorerUrl = pendingTxHash
-    ? getStellarExplorerUrl(pendingTxHash)
-    : confirmedTx
-      ? getStellarExplorerUrl(confirmedTx.hash)
-      : null;
+  const explorerUrl = getStellarExplorerUrl(transaction?.hash);
 
   const needsWallet = !isConnected || walletCTA.status === "not-installed";
 
@@ -224,9 +246,7 @@ export const TipButton = ({
         )}
       >
         <span className="text-lg">💰</span>
-        {needsWallet && (
-          <Wallet className="h-3.5 w-3.5 text-purple-300/70" />
-        )}
+        {needsWallet && <Wallet className="h-3.5 w-3.5 text-purple-300/70" />}
         {tipCount > 0 && (
           <span className="text-sm font-medium text-white">{tipCount}</span>
         )}
@@ -274,18 +294,25 @@ export const TipButton = ({
           )}
 
           {/* Confirmed state */}
-          {confirmedTx && (
+          {lifecycle === "success" && transaction && (
             <div className="mb-3 p-3 rounded-lg bg-green-900/30 border border-green-700/50">
               <div className="flex items-center gap-2 text-green-400 font-medium text-sm">
                 <span>✓</span>
                 <span>Tip confirmed</span>
               </div>
               <p className="text-green-300 text-xs mt-1">
-                {confirmedTx.amount} XLM sent
+                {transaction.amount} XLM sent
               </p>
-              {confirmedTx.hash && (
+              <p
+                className="mt-1 truncate font-mono text-xs text-green-300/70"
+                title={transaction.hash}
+              >
+                Tx: {transaction.hash}
+              </p>
+              <span className="sr-only">Tip sent successfully</span>
+              {explorerUrl && (
                 <a
-                  href={getStellarExplorerUrl(confirmedTx.hash) ?? "#"}
+                  href={explorerUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block mt-1 text-xs text-green-400 underline hover:text-green-300 truncate"
@@ -296,44 +323,83 @@ export const TipButton = ({
             </div>
           )}
 
-          {/* Pending verification state */}
-          {pendingTxHash && (
-            <div className="mb-3 p-3 rounded-lg bg-yellow-900/30 border border-yellow-700/50">
-              <div className="flex items-center gap-2 text-yellow-400 font-medium text-sm">
-                <Spinner />
-                <span>Verifying transaction</span>
-              </div>
-              <p className="text-yellow-300 text-xs mt-1">
-                Checking Stellar network confirmation status
-              </p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleVerify}
-                  disabled={isSending}
-                  className="flex-1 text-xs bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 py-1.5 rounded text-white transition-colors"
-                >
-                  {isSending ? "Checking..." : "Retry Verification"}
-                </button>
-                {explorerUrl && (
-                  <a
-                    href={explorerUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs bg-zinc-700 hover:bg-zinc-600 py-1.5 px-2 rounded text-zinc-300 transition-colors"
-                  >
-                    View on Explorer
-                  </a>
+          {/* Verification and verification-recovery states */}
+          {transaction &&
+            (lifecycle === "verifying" || lifecycle === "failed") && (
+              <div
+                className={cn(
+                  "mb-3 rounded-lg border p-3",
+                  lifecycle === "verifying"
+                    ? "border-yellow-700/50 bg-yellow-900/30"
+                    : "border-red-700/50 bg-red-900/30",
                 )}
+              >
+                <div
+                  className={cn(
+                    "flex items-center gap-2 text-sm font-medium",
+                    lifecycle === "verifying"
+                      ? "text-yellow-400"
+                      : "text-red-400",
+                  )}
+                >
+                  {lifecycle === "verifying" && <Spinner />}
+                  <span>Verifying transaction</span>
+                  {lifecycle === "failed" && <span>failed</span>}
+                </div>
+                <p
+                  className={cn(
+                    "mt-1 text-xs",
+                    lifecycle === "verifying"
+                      ? "text-yellow-300"
+                      : "text-red-400",
+                  )}
+                >
+                  {lifecycle === "verifying"
+                    ? `Backend confirmation is being polled for ${transaction.amount} XLM.`
+                    : `Backend verification is still pending. ${error}`}
+                </p>
+                <p className="mt-1 truncate font-mono text-xs text-zinc-400">
+                  Tx: {transaction.hash}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={handleVerify}
+                    disabled={isBusy}
+                    className={cn(
+                      "flex-1 rounded py-1.5 text-xs text-white transition-colors disabled:opacity-50",
+                      lifecycle === "verifying"
+                        ? "bg-yellow-700 hover:bg-yellow-600"
+                        : "bg-red-700 hover:bg-red-600",
+                    )}
+                  >
+                    {lifecycle === "verifying"
+                      ? "Checking..."
+                      : "Retry Verification"}
+                  </button>
+                  {explorerUrl && (
+                    <a
+                      href={explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded bg-zinc-700 px-2 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-600"
+                    >
+                      View on Explorer
+                    </a>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Error state */}
-          {error && !pendingTxHash && !confirmedTx && (
-            <div className="mb-3 p-3 rounded-lg bg-red-900/30 border border-red-700/50">
-              <p className="text-red-400 text-xs">{error}</p>
+          {/* Submission error state */}
+          {lifecycle === "failed" && error && !transaction && (
+            <div className="mb-3 rounded-lg border border-red-700/50 bg-red-900/30 p-3">
+              <p className="text-sm font-medium text-red-400">Tip failed</p>
+              <p className="text-xs text-red-400">{error}</p>
               <button
-                onClick={() => setError(null)}
+                onClick={() => {
+                  setError(null);
+                  setLifecycle("idle");
+                }}
                 className="mt-2 text-xs text-red-300 underline hover:text-red-200"
               >
                 Dismiss
@@ -342,11 +408,12 @@ export const TipButton = ({
           )}
 
           {/* Input */}
-          {!confirmedTx && (
+          {!transaction && lifecycle !== "success" && (
             <>
               <div className="relative">
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={tipAmount}
                   onChange={(e) => {
                     setTipAmount(e.target.value);
@@ -354,7 +421,7 @@ export const TipButton = ({
                   }}
                   min={MIN_TIP_AMOUNT}
                   step={TIP_STEP}
-                  disabled={isSending}
+                  disabled={isBusy}
                   className="w-full p-2 pr-12 bg-zinc-900 text-white rounded-lg border border-zinc-700 focus:border-purple-500 focus:outline-none disabled:opacity-50"
                   aria-label="Tip amount in XLM"
                 />
@@ -362,12 +429,14 @@ export const TipButton = ({
                   XLM
                 </span>
               </div>
-              <p className={cn(
-                "mt-2 text-xs",
-                getTipAmountValidationError(tipAmount)
-                  ? "text-red-400"
-                  : "text-zinc-400",
-              )}>
+              <p
+                className={cn(
+                  "mt-2 text-xs",
+                  getTipAmountValidationError(tipAmount)
+                    ? "text-red-400"
+                    : "text-zinc-400",
+                )}
+              >
                 {getTipAmountValidationError(tipAmount) ??
                   `Enter amount in ${TIP_UNIT} with ${TIP_STEP} precision. Minimum ${MIN_TIP_AMOUNT} ${TIP_UNIT}.`}
               </p>
@@ -376,7 +445,7 @@ export const TipButton = ({
                 onClick={handleTip}
                 disabled={
                   walletCTA.disabled ||
-                  isSending ||
+                  isBusy ||
                   walletCTA.status === "not-installed"
                 }
                 className={cn(
@@ -387,7 +456,7 @@ export const TipButton = ({
                   "disabled:opacity-50 disabled:cursor-not-allowed",
                 )}
                 aria-label={
-                  isSending
+                  lifecycle === "submitting"
                     ? "Sending tip"
                     : walletCTA.status === "not-connected"
                       ? "Connect Wallet to Tip"
@@ -396,7 +465,7 @@ export const TipButton = ({
                         : `Send ${tipAmount} XLM tip`
                 }
               >
-                {isSending ? (
+                {lifecycle === "submitting" ? (
                   <>
                     <Spinner />
                     <span>Sending...</span>
@@ -415,7 +484,8 @@ export const TipButton = ({
 
           {/* Stats footer */}
           <div className="text-xs text-zinc-500 mt-3 pt-2 border-t border-zinc-700">
-            {totalAmount.toFixed(2)} XLM total • {tipCount} tip{tipCount !== 1 ? "s" : ""}
+            {totalAmount.toFixed(2)} XLM total • {tipCount} tip
+            {tipCount !== 1 ? "s" : ""}
           </div>
         </div>
       )}
