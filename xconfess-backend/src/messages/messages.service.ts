@@ -135,7 +135,7 @@ export class MessagesService {
       where: { id: confessionId },
       relations: ['anonymousUser'],
     });
-    if (!confession) throw new NotFoundException('Confession not found');
+    if (!confession) throw new NotFoundException('Thread not found');
 
     const userAnons = await this.userAnonRepo.find({
       where: { userId: user.id },
@@ -148,7 +148,7 @@ export class MessagesService {
       anonIds,
     );
     if (!viewerRole) {
-      throw new ForbiddenException('You are not part of this conversation');
+      throw new NotFoundException('Thread not found');
     }
 
     await this.customMessageRepository.markThreadRead(

@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PAGINATION } from '../../common/pagination/pagination.constants';
 
 export enum SortBy {
   REACTIONS = 'reactions',
@@ -51,14 +52,14 @@ export class SearchConfessionDto {
     description: 'Number of results per page',
     example: 10,
     minimum: 1,
-    maximum: 50,
+    maximum: PAGINATION.MAX_LIMIT,
     default: 10,
   })
   @IsOptional()
   @Transform(({ value }) => parseInt(value))
   @IsInt()
   @Min(1)
-  @Max(50)
+  @Max(PAGINATION.MAX_LIMIT)
   limit?: number = 10;
 
   // ===== NEW ADVANCED FILTERS =====

@@ -157,7 +157,19 @@ describe('MessagesService', () => {
       );
     });
 
-    it('should throw ForbiddenException if user is neither author nor sender', async () => {
+    it('should throw NotFoundException if confession does not exist', async () => {
+      jest.spyOn(confessionRepo, 'findOne').mockResolvedValue(null);
+
+      await expect(
+        service.findForConfessionThread(
+          mockConfessionId,
+          mockSenderId,
+          mockUser,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw NotFoundException if user is neither author nor sender', async () => {
       const confession = {
         id: mockConfessionId,
         anonymousUser: { id: 'other-anon' },
@@ -175,7 +187,7 @@ describe('MessagesService', () => {
           mockSenderId,
           mockUser,
         ),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

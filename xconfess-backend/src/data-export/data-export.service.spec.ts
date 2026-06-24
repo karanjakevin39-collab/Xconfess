@@ -13,12 +13,21 @@ import { EXPORT_QUEUE_NAME } from './data-export.constants';
 describe('DataExportService', () => {
   let service: DataExportService;
 
+  const mockQueryBuilder = {
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    execute: jest.fn(),
+  };
+
   const mockExportRepository = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
     update: jest.fn(),
+    createQueryBuilder: jest.fn(() => mockQueryBuilder as any),
   };
 
   const mockChunkRepository = {
@@ -48,6 +57,12 @@ describe('DataExportService', () => {
     mockExportRepository.create.mockReset();
     mockExportRepository.save.mockReset();
     mockExportRepository.update.mockReset();
+    mockExportRepository.createQueryBuilder.mockReset();
+    mockQueryBuilder.update.mockClear();
+    mockQueryBuilder.set.mockClear();
+    mockQueryBuilder.where.mockClear();
+    mockQueryBuilder.andWhere.mockClear();
+    mockQueryBuilder.execute.mockClear();
     mockChunkRepository.findOne.mockReset();
     mockExportQueue.add.mockReset();
     mockAuditLogService.logExportLifecycleEvent.mockReset();
@@ -891,5 +906,36 @@ describe('DataExportService', () => {
 
       expect(result).toBe(false);
     });
+  });
+
+  it('expires stale download tokens and logs a cleanup lifecycle event', async () => {
+    const now = new Date('2026-03-25T10:00:00.000Z');
+    jest.useFakeTimers().setSystemTime(now);
+    mockQueryBuilder.execute.mockResolvedValue({ affected: 3 });
+    mockExportRepository.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
+
+    const result = await service.expireStaleDownloadTokens();
+
+    expect(result).toBe(3);
+    expect(mockExportRepository.createQueryBuilder).toHaveBeenCalled();
+    expect(mockQueryBuilder.update).toHaveBeenCalledWith(ExportRequest);
+    expect(mockQueryBuilder.set).toHaveBeenCalledWith({
+      downloadToken: null,
+      expiredAt: expect.any(Function),
+    });
+    expect(mockQueryBuilder.where).toHaveBeenCalledWith('downloadToken IS NOT NULL');
+    expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('downloadedAt IS NULL');
+    expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+      'createdAt < :cutoff',
+      expect.objectContaining({ cutoff: expect.any(Date) }),
+    );
+    expect(mockAuditLogService.logExportLifecycleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'export_expired',
+        actorType: 'system',
+      }),
+    );
+
+    jest.useRealTimers();
   });
 });

@@ -1,6 +1,7 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -85,7 +86,19 @@ export class ConfessionService {
         where: { idempotencyKey: dto.idempotencyKey },
       });
       if (existing) {
-        existing.message = decryptConfession(existing.message, this.aesKey);
+        const decryptedMessage = decryptConfession(existing.message, this.aesKey);
+        const hasSamePayload =
+          msg === decryptedMessage &&
+          (dto.gender ?? null) === (existing.gender ?? null) &&
+          (dto.stellarTxHash ?? null) === (existing.stellarTxHash ?? null);
+
+        if (!hasSamePayload) {
+          throw new ConflictException(
+            'Idempotency key replay conflict: request body does not match original submission.',
+          );
+        }
+
+        existing.message = decryptedMessage;
         return existing;
       }
     }
@@ -202,6 +215,29 @@ export class ConfessionService {
       return savedConfession;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
+
+      if (dto.idempotencyKey && (error as any)?.code === '23505') {
+        const existing = await this.confessionRepo.findOne({
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (existing) {
+          const decryptedMessage = decryptConfession(existing.message, this.aesKey);
+          const hasSamePayload =
+            msg === decryptedMessage &&
+            (dto.gender ?? null) === (existing.gender ?? null) &&
+            (dto.stellarTxHash ?? null) === (existing.stellarTxHash ?? null);
+
+          if (hasSamePayload) {
+            existing.message = decryptedMessage;
+            return existing;
+          }
+
+          throw new ConflictException(
+            'Idempotency key replay conflict: request body does not match original submission.',
+          );
+        }
+      }
+
       throw new InternalServerErrorException('Failed to create confession');
     }
   }
@@ -879,6 +915,12 @@ export class ConfessionService {
     // A stellarTxHash without isAnchored means a prior submission is pending
     // on-chain. Return the existing pending state instead of starting new work.
     if (confession.stellarTxHash && !confession.isAnchored) {
+      this.logger.log({
+        event: 'anchor_replay',
+        confessionId: confession.id,
+        stellarTxHash: confession.stellarTxHash,
+      });
+
       return {
         confessionId: confession.id,
         stellarTxHash: confession.stellarTxHash,
@@ -910,10 +952,19 @@ export class ConfessionService {
 
     // Persist as pending: the transaction hash is recorded but isAnchored stays
     // false until verifyStellarAnchor confirms the chain result.
-    await this.confessionRepo.update(id, {
-      stellarTxHash: anchorData.stellarTxHash,
-      stellarHash: anchorData.stellarHash,
-    });
+    try {
+      await this.confessionRepo.update(id, {
+        stellarTxHash: anchorData.stellarTxHash,
+        stellarHash: anchorData.stellarHash,
+      });
+    } catch (error) {
+      if ((error as any)?.code === '23505') {
+        throw new ConflictException(
+          'Duplicate Stellar transaction hash detected for this confession.',
+        );
+      }
+      throw error;
+    }
 
     const updated = await this.confessionRepo.findOne({ where: { id } });
     if (updated) {

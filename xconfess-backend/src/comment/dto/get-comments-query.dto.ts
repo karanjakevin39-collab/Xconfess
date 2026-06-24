@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsBoolean } from 'class-validator';
+import { IsEnum, IsOptional, IsBoolean, IsInt, Min } from 'class-validator';
 import { CursorPaginationDto } from '../../common/pagination/cursor-pagination.dto';
 import { Transform } from 'class-transformer';
 
@@ -24,6 +24,8 @@ export class GetCommentsQueryDto extends CursorPaginationDto {
   })
   @IsOptional()
   @Transform(({ value }) => parseInt(value))
+  @IsInt()
+  @Min(1)
   page?: number = 1;
 
   @ApiPropertyOptional({

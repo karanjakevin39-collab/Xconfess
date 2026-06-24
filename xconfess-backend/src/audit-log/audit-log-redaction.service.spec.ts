@@ -139,6 +139,23 @@ describe('AuditLogRedactionService', () => {
       expect(result!.confessionId).toBe('abc-123');
     });
 
+    it('redacts sensitive moderator/admin action metadata with stable markers', () => {
+      const result = service.redactMetadata({
+        actorType: 'admin',
+        actorEmail: 'moderator@example.com',
+        sessionMetadata:
+          'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiNDIiLCJpYXQiOjE2Mjk5OTk5OTl9.bFfKxwRJSMeKaF2QT4fwpMeJf36POk6yJV_adQssw5c',
+        stellarSecret: 'sk_test_supersecret1234567890',
+        comment: 'Reviewer note',
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.actorEmail).toBe('mo***@example.com');
+      expect(result!.sessionMetadata).toContain('xxx.');
+      expect(result!.stellarSecret).toBe('[REDACTED]');
+      expect(result!.comment).toBe('Reviewer note');
+    });
+
     it('redacts signatures from metadata', () => {
       const result = service.redactMetadata({
         signature: '0xabcd1234deadbeef5678',

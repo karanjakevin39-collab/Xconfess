@@ -8,6 +8,15 @@ import { AnonymousConfession } from './entities/confession.entity';
 import { StellarService } from '../stellar/stellar.service';
 import { AnchorConfessionDto } from '../stellar/dto/anchor-confession.dto';
 import { AnonymousConfessionRepository } from './repository/confession.repository';
+import { ConfessionViewCacheService } from './confession-view-cache.service';
+import { AnonymousUserService } from '../user/anonymous-user.service';
+import { AiModerationService } from '../moderation/ai-moderation.service';
+import { ModerationRepositoryService } from '../moderation/moderation-repository.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { CacheService } from '../cache/cache.service';
+import { TagService } from './tag.service';
+import { EncryptionService } from '../encryption/encryption.service';
+import { AppLogger } from '../logger/logger.service';
 
 // Mock encryption
 jest.mock('../utils/confession-encryption', () => ({
@@ -42,6 +51,7 @@ describe('ConfessionService - Idempotency', () => {
   const mockExistingConfession = {
     id: 'existing-confession-id',
     message: 'encrypted-existing-message',
+    gender: 'male',
     stellarTxHash: 'a'.repeat(64),
     stellarHash: 'hash123',
     isAnchored: true,
@@ -54,6 +64,12 @@ describe('ConfessionService - Idempotency', () => {
   };
 
   beforeEach(async () => {
+    mockConfessionRepo.findOne.mockReset();
+    mockConfessionRepo.update.mockReset();
+    mockConfessionRepo.create.mockReset();
+    mockConfessionRepo.save.mockReset();
+    mockConfessionRepo.manager.getRepository.mockReset();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ConfessionService,
@@ -79,39 +95,39 @@ describe('ConfessionService - Idempotency', () => {
           useValue: { get: jest.fn().mockReturnValue('test-aes-key-32-chars-long!!') },
         },
         {
-          provide: 'AppLogger',
+          provide: AppLogger,
           useValue: { log: jest.fn(), error: jest.fn(), warn: jest.fn() },
         },
         {
-          provide: 'EventEmitter2',
+          provide: EventEmitter2,
           useValue: { emit: jest.fn() },
         },
         {
-          provide: 'AnonymousUserService',
+          provide: AnonymousUserService,
           useValue: { create: jest.fn() },
         },
         {
-          provide: 'ModerationRepositoryService',
+          provide: ModerationRepositoryService,
           useValue: { createLog: jest.fn() },
         },
         {
-          provide: 'AiModerationService',
+          provide: AiModerationService,
           useValue: { moderateContent: jest.fn().mockResolvedValue({ score: 0, flags: [], status: 'approved', requiresReview: false, details: {} }) },
         },
         {
-          provide: 'ConfessionViewCacheService',
+          provide: ConfessionViewCacheService,
           useValue: { invalidateCache: jest.fn() },
         },
         {
-          provide: 'CacheService',
+          provide: CacheService,
           useValue: { get: jest.fn(), set: jest.fn() },
         },
         {
-          provide: 'TagService',
+          provide: TagService,
           useValue: { validateTags: jest.fn().mockResolvedValue([]) },
         },
         {
-          provide: 'EncryptionService',
+          provide: EncryptionService,
           useValue: { encrypt: jest.fn(), decrypt: jest.fn() },
         },
       ],
@@ -136,7 +152,7 @@ describe('ConfessionService - Idempotency', () => {
           stellarHash: 'hash123',
         } as any);
       
-      confessionRepo.update = jest.fn().mockResolvedValue({ affected: 1 } as any);
+      confessionRepo.update.mockResolvedValue({ affected: 1 } as any);
 
       const result = await service.anchorConfession('test-confession-id', mockAnchorDto);
 
@@ -144,16 +160,18 @@ describe('ConfessionService - Idempotency', () => {
       expect(result).toHaveProperty('stellarTxHash', 'a'.repeat(64));
     });
 
-    it('✅ should return existing metadata on replay (idempotent)', async () => {
-      confessionRepo.findOne
-        .mockResolvedValueOnce(mockConfession as any)
-        .mockResolvedValueOnce(mockExistingConfession as any);
+    it('✅ should return existing pending anchor metadata on replay', async () => {
+      confessionRepo.findOne.mockResolvedValueOnce({
+        ...mockConfession,
+        stellarTxHash: 'a'.repeat(64),
+        isAnchored: false,
+      } as any);
 
       const result = await service.anchorConfession('test-confession-id', mockAnchorDto);
 
-      expect(result).toHaveProperty('idempotent', true);
-      expect(result).toHaveProperty('confessionId', 'existing-confession-id');
-      expect(result).toHaveProperty('isAnchored', true);
+      expect(result).toHaveProperty('anchorPending', true);
+      expect(result).toHaveProperty('confessionId', 'test-confession-id');
+      expect(result).toHaveProperty('isAnchored', false);
       expect(result).toHaveProperty('stellarTxHash', 'a'.repeat(64));
     });
 
@@ -162,7 +180,7 @@ describe('ConfessionService - Idempotency', () => {
         .mockResolvedValueOnce(mockConfession as any)
         .mockResolvedValueOnce(null);
 
-      confessionRepo.update = jest.fn().mockRejectedValue({
+      confessionRepo.update.mockRejectedValue({
         code: '23505',
       });
 
@@ -183,9 +201,11 @@ describe('ConfessionService - Idempotency', () => {
     it('✅ should log replay detection events', async () => {
       const loggerSpy = jest.spyOn(service['logger'], 'log');
 
-      confessionRepo.findOne
-        .mockResolvedValueOnce(mockConfession as any)
-        .mockResolvedValueOnce(mockExistingConfession as any);
+      confessionRepo.findOne.mockResolvedValueOnce({
+        ...mockConfession,
+        stellarTxHash: 'a'.repeat(64),
+        isAnchored: false,
+      } as any);
 
       await service.anchorConfession('test-confession-id', mockAnchorDto);
 
@@ -193,8 +213,55 @@ describe('ConfessionService - Idempotency', () => {
         expect.objectContaining({
           event: 'anchor_replay',
           stellarTxHash: 'a'.repeat(64),
-        })
+        }),
       );
+    });
+  });
+
+  describe('create - idempotency', () => {
+    it('returns existing confession for repeated create with same idempotency key and matching body', async () => {
+      confessionRepo.findOne.mockResolvedValueOnce({ ...mockExistingConfession } as any);
+
+      const result = await service.create({
+        message: 'encrypted-existing-message',
+        idempotencyKey: 'idem-key',
+        gender: 'male',
+        stellarTxHash: 'a'.repeat(64),
+      } as any);
+
+      expect(result).toEqual({ ...mockExistingConfession });
+      expect(result.message).toBe(mockExistingConfession.message);
+    });
+
+    it('throws ConflictException when same idempotency key is reused with a different message', async () => {
+      confessionRepo.findOne.mockResolvedValueOnce(mockExistingConfession as any);
+
+      await expect(
+        service.create({
+          message: 'different message',
+          idempotencyKey: 'idem-key',
+          gender: 'male',
+          stellarTxHash: 'a'.repeat(64),
+        } as any),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('returns existing confession when duplicate idempotency key is detected during save', async () => {
+      confessionRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...mockExistingConfession } as any);
+      confessionRepo.create.mockReturnValue(mockConfession as any);
+      confessionRepo.save.mockRejectedValueOnce({ code: '23505' });
+
+      const result = await service.create({
+        message: 'encrypted-existing-message',
+        idempotencyKey: 'idem-key',
+        gender: 'male',
+        stellarTxHash: 'a'.repeat(64),
+      } as any);
+
+      expect(result).toEqual({ ...mockExistingConfession });
+      expect(confessionRepo.save).toHaveBeenCalled();
     });
   });
 });
