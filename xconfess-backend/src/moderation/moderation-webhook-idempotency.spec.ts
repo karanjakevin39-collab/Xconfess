@@ -125,6 +125,27 @@ describe('ModerationWebhookController - Idempotency and Signature Safety', () =>
       expect(result.success).toBe(true);
       expect(result.isIdempotent).toBe(false);
     });
+
+    it('should reject stale but signed requests and audit them', async () => {
+      // Set payload timestamp to long ago
+      const stalePayload = { ...mockPayload, timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString() };
+      const serializedPayload = JSON.stringify(stalePayload);
+      const validSignature = crypto
+        .createHmac('sha256', mockWebhookSecret)
+        .update(serializedPayload)
+        .digest('hex');
+
+      // Spy on moderationRepoService.syncWebhookResult to ensure audit attempt
+      const syncSpy = jest.spyOn(moderationRepoService, 'syncWebhookResult').mockResolvedValue({ log: {} as any, isIdempotent: false });
+
+      await expect(
+        controller.handleModerationResults(stalePayload, validSignature),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(syncSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryStale: true }),
+      );
+    });
   });
 
   describe('Payload Validation', () => {

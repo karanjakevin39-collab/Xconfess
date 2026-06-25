@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SearchDiscoveryService } from './search-discovery.service';
@@ -70,6 +71,14 @@ describe('SearchDiscoveryService', () => {
       expect(result.filters).toEqual({ tags: ['tag1'] });
       expect(savedSearchRepo.create).not.toHaveBeenCalled();
     });
+
+    it('should throw NotFoundException when updating preset owned by another user', async () => {
+      const existing = { id: 'uuid', name: 'test', userId: 2, filters: {} };
+      savedSearchRepo.findOne.mockResolvedValue(existing as any);
+      const dto = { name: 'test', filters: { tags: ['tag1'] } };
+      await expect(service.savePreset(1, dto)).rejects.toThrow(NotFoundException);
+      expect(savedSearchRepo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('recordSearch', () => {
@@ -112,6 +121,38 @@ describe('SearchDiscoveryService', () => {
       await service.recordSearch(1, { q: 'new search' });
 
       expect(searchHistoryRepo.remove).toHaveBeenCalledWith(oldest);
+    });
+  });
+
+  describe('deletePreset', () => {
+    it('should delete preset for owner', async () => {
+      savedSearchRepo.delete.mockResolvedValue({ affected: 1 } as any);
+      const res = await service.deletePreset(1, 'id-1');
+      expect(savedSearchRepo.delete).toHaveBeenCalledWith({ id: 'id-1', userId: 1 });
+      expect(res).toEqual({ affected: 1 });
+    });
+
+    it('should throw NotFoundException when deleting a preset owned by another user', async () => {
+      savedSearchRepo.delete.mockResolvedValue({ affected: 0 } as any);
+      await expect(service.deletePreset(1, 'id-1')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('reads are scoped', () => {
+    it('should list presets scoped to user', async () => {
+      const items = [{ id: '1', userId: 1, name: 'a' }];
+      savedSearchRepo.find.mockResolvedValue(items as any);
+      const res = await service.listPresets(1);
+      expect(savedSearchRepo.find).toHaveBeenCalledWith({ where: { userId: 1 }, order: { updatedAt: 'DESC' } });
+      expect(res).toEqual(items);
+    });
+
+    it('should get recent searches scoped to user', async () => {
+      const hist = [{ id: 'h1', userId: 1, query: 'x' }];
+      searchHistoryRepo.find.mockResolvedValue(hist as any);
+      const res = await service.getRecentSearches(1);
+      expect(searchHistoryRepo.find).toHaveBeenCalledWith({ where: { userId: 1 }, order: { usedAt: 'DESC' }, take: 20 });
+      expect(res).toEqual(hist);
     });
   });
 });

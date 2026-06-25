@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as crypto from 'crypto';
@@ -39,6 +39,9 @@ export class SearchDiscoveryService {
     });
 
     if (preset) {
+      if (preset.userId !== userId) {
+        throw new NotFoundException('Saved preset not found or unauthorized');
+      }
       preset.filters = filters;
       return this.savedSearchRepo.save(preset);
     }
@@ -59,7 +62,12 @@ export class SearchDiscoveryService {
   }
 
   async deletePreset(userId: number, id: string) {
-    return this.savedSearchRepo.delete({ id, userId });
+    const result = await this.savedSearchRepo.delete({ id, userId });
+    // If nothing was deleted, either it doesn't exist or isn't owned by user
+    if ((result as any)?.affected === 0) {
+      throw new NotFoundException('Saved preset not found or unauthorized');
+    }
+    return result;
   }
 
   async recordSearch(userId: number, dto: SearchConfessionDto) {

@@ -434,6 +434,36 @@ export class AuditLogService {
     });
   }
 
+  /**
+   * Log an admin-initiated CSV export (frontend-driven)
+   */
+  async logAdminCsvExport(
+    adminId: string | number,
+    record: {
+      label: string;
+      requestId?: string | null;
+      rowCount?: number | null;
+      filters?: Record<string, unknown> | null;
+    },
+    context?: AuditLogContext,
+  ): Promise<void> {
+    await this.log({
+      actionType: AuditActionType.ADMIN_CSV_EXPORT,
+      metadata: {
+        entityType: 'admin_csv_export',
+        label: record.label,
+        requestId: record.requestId || null,
+        rowCount: record.rowCount ?? null,
+        filters: record.filters || null,
+        exportedAt: new Date().toISOString(),
+      },
+      context: {
+        ...context,
+        userId: this.toNullableUserId(String(adminId)),
+      },
+    });
+  }
+
   private mapExportActionType(action: ExportLifecycleAction): AuditActionType {
     switch (action) {
       case 'request_created':

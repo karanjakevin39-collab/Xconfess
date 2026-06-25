@@ -64,6 +64,9 @@ export enum AuditActionType {
   EXPORT_TOKEN_EXPIRED = 'export_token_expired',   // <-- ADDED
   EXPORT_EXPIRED = 'export_expired',               // <-- ADDED
 
+  // Admin CSV export actions initiated from the frontend
+  ADMIN_CSV_EXPORT = 'admin_csv_export',
+
   /** Privileged Stellar server-signed contract invocation */
   STELLAR_CONTRACT_INVOCATION = 'stellar_contract_invocation',
 

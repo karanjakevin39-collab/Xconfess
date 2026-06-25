@@ -35,6 +35,7 @@ interface WebhookPayload {
 export class ModerationWebhookController {
   private readonly logger = new Logger(ModerationWebhookController.name);
   private readonly webhookSecret: string;
+  private readonly timestampToleranceSeconds: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -44,6 +45,10 @@ export class ModerationWebhookController {
     private readonly moderationRepoService: ModerationRepositoryService,
   ) {
     this.webhookSecret = this.configService.get<string>('WEBHOOK_SECRET', '');
+    this.timestampToleranceSeconds = this.configService.get<number>(
+      'WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS',
+      300,
+    );
   }
 
   @Post('results')
@@ -55,12 +60,58 @@ export class ModerationWebhookController {
     // Issue #782: Enhanced signature validation and malformed payload handling
     const serializedPayload = JSON.stringify(payload);
 
-    // Validate signature first
+    // Validate signature presence first
     if (!signature) {
       this.logger.warn('Missing moderation webhook signature');
       throw new UnauthorizedException('Missing signature');
     }
 
+    // Validate timestamp freshness before processing to prevent replay.
+    // If timestamp is missing or malformed, we treat as bad request.
+    let timestamp: Date | null = null;
+    try {
+      timestamp = payload.timestamp ? new Date(payload.timestamp) : null;
+      if (!timestamp || isNaN(timestamp.getTime())) {
+        this.logger.warn('Malformed or missing timestamp in webhook payload');
+        throw new BadRequestException('Malformed payload: invalid timestamp');
+      }
+    } catch (err) {
+      this.logger.warn('Malformed timestamp in moderation webhook payload');
+      throw new BadRequestException('Malformed payload: invalid timestamp');
+    }
+
+    const now = new Date();
+    const ageSeconds = Math.abs((now.getTime() - timestamp.getTime()) / 1000);
+    if (ageSeconds > this.timestampToleranceSeconds) {
+      // Audit stale but signed request and reject
+      try {
+        await this.moderationRepoService.syncWebhookResult(
+          {
+            confessionId: payload.confessionId ?? '',
+            content: serializedPayload,
+            result: {
+              score: payload.moderationScore ?? 0,
+              flags: (payload.moderationFlags ?? []) as ModerationCategory[],
+              status: payload.moderationStatus ?? ModerationStatus.PENDING,
+              details: payload.details ?? {},
+              requiresReview: false,
+            },
+            deliveryHash: this.buildDeliveryHash(serializedPayload),
+            deliveryTimestamp: payload.timestamp,
+            signatureValid: this.verifySignature(serializedPayload, signature),
+            payloadMalformed: false,
+            deliveryStale: true,
+          },
+        );
+      } catch (e) {
+        this.logger.error('Failed to audit stale webhook', e as any);
+      }
+
+      this.logger.warn('Rejected stale moderation webhook delivery');
+      throw new UnauthorizedException('Stale webhook delivery');
+    }
+
+    // Now validate signature
     if (!this.verifySignature(serializedPayload, signature)) {
       this.logger.warn('Invalid moderation webhook signature');
       throw new UnauthorizedException('Invalid signature');
